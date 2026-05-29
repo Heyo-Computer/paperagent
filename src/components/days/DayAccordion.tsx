@@ -132,7 +132,18 @@ export function WeekAccordion() {
                 <span class="accordion-weekday">{info.weekday}</span>
                 <span class="accordion-date">{info.display}</span>
               </span>
-              {count > 0 && <span class="accordion-badge">{count}</span>}
+              {count > 0 && (
+                <span
+                  class="task-meter"
+                  role="img"
+                  aria-label={`${count} ${count === 1 ? "task" : "tasks"}`}
+                  title={`${count} ${count === 1 ? "task" : "tasks"}`}
+                >
+                  {Array.from({ length: Math.min(count, 7) }).map((_, i) => (
+                    <span key={i} class="task-meter-bar" />
+                  ))}
+                </span>
+              )}
             </button>
 
             {isOpen && (

@@ -16,10 +16,11 @@ const MODELS = [
 ];
 
 const BACKENDS = [
-  { value: "libvirt", label: "Libvirt (Linux)" },
+  { value: "libvirt", label: "Libvirt (Linux, recommended)" },
+  { value: "kvm", label: "KVM (Linux)" },
+  { value: "firecracker", label: "Firecracker (Linux)" },
   { value: "apple_vf", label: "Apple VF (macOS)" },
   { value: "docker", label: "Docker" },
-  { value: "firecracker", label: "Firecracker" },
   { value: "bubblewrap", label: "Bubblewrap" },
 ];
 
@@ -44,7 +45,7 @@ const IMAGES = [
 const DEFAULT_CONFIG: AgentConfig = {
   api_key: "",
   model: "claude-sonnet-4-6-20250514",
-  vm_name: "txture-agent",
+  vm_name: "todo-agent",
   vm_backend: "libvirt",
   data_dir: "~/.todo",
   heyo_api_key: "",
@@ -56,6 +57,9 @@ const DEFAULT_CONFIG: AgentConfig = {
   spec_verbosity: "normal",
   user_context: "",
   theme_name: "dark",
+  llm_provider: "anthropic",
+  openrouter_api_key: "",
+  openrouter_model: "anthropic/claude-sonnet-4-6",
 };
 
 const VERBOSITIES: { value: "terse" | "normal" | "detailed"; label: string; hint: string }[] = [
@@ -98,7 +102,7 @@ export function SettingsPanel() {
     try {
       await setAgentConfig(config);
       await setCalendarConfig(calConfig);
-      agentName.value = config.vm_name || "txture";
+      agentName.value = config.vm_name || "planner";
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -202,28 +206,71 @@ export function SettingsPanel() {
           <div class="settings-section-label">Agent</div>
 
           <label class="settings-field">
-            <span class="settings-label">Anthropic API Key</span>
-            <input
-              type="password"
-              class="settings-input"
-              value={config.api_key}
-              onInput={(e) => update({ api_key: e.currentTarget.value })}
-              placeholder="sk-ant-..."
-            />
-          </label>
-
-          <label class="settings-field">
-            <span class="settings-label">Model</span>
+            <span class="settings-label">LLM Provider</span>
             <select
               class="settings-select"
-              value={config.model}
-              onChange={(e) => update({ model: e.currentTarget.value })}
+              value={config.llm_provider}
+              onChange={(e) => update({ llm_provider: e.currentTarget.value as "anthropic" | "openrouter" })}
             >
-              {MODELS.map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
+              <option value="anthropic">Anthropic (direct)</option>
+              <option value="openrouter">OpenRouter</option>
             </select>
           </label>
+
+          {config.llm_provider === "anthropic" && (
+            <>
+              <label class="settings-field">
+                <span class="settings-label">Anthropic API Key</span>
+                <input
+                  type="password"
+                  class="settings-input"
+                  value={config.api_key}
+                  onInput={(e) => update({ api_key: e.currentTarget.value })}
+                  placeholder="sk-ant-..."
+                />
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-label">Model</span>
+                <select
+                  class="settings-select"
+                  value={config.model}
+                  onChange={(e) => update({ model: e.currentTarget.value })}
+                >
+                  {MODELS.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
+
+          {config.llm_provider === "openrouter" && (
+            <>
+              <label class="settings-field">
+                <span class="settings-label">OpenRouter API Key</span>
+                <input
+                  type="password"
+                  class="settings-input"
+                  value={config.openrouter_api_key}
+                  onInput={(e) => update({ openrouter_api_key: e.currentTarget.value })}
+                  placeholder="sk-or-..."
+                />
+              </label>
+
+              <label class="settings-field">
+                <span class="settings-label">OpenRouter Model</span>
+                <input
+                  type="text"
+                  class="settings-input"
+                  value={config.openrouter_model}
+                  onInput={(e) => update({ openrouter_model: e.currentTarget.value })}
+                  placeholder="anthropic/claude-sonnet-4-6"
+                />
+                <span class="settings-hint">e.g. anthropic/claude-sonnet-4-6, openai/gpt-4.1, google/gemini-2.5-pro. See openrouter.ai/models.</span>
+              </label>
+            </>
+          )}
 
           <label class="settings-field">
             <span class="settings-label">VM Name</span>
@@ -232,7 +279,7 @@ export function SettingsPanel() {
               class="settings-input"
               value={config.vm_name}
               onInput={(e) => update({ vm_name: e.currentTarget.value })}
-              placeholder="txture-agent"
+              placeholder="todo-agent"
             />
           </label>
 

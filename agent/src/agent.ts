@@ -1,10 +1,33 @@
-import Anthropic from "@anthropic-ai/sdk";
 import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile, listDirectory } from "./tools/file.js";
 import { execCommand } from "./tools/shell.js";
-import { saveTodoSpec, updateTodo, getTodosForDate } from "./tools/todo.js";
+import { saveTodoSpec, updateTodo, getTodosForDate, getBacklogText, addBacklogItem, moveBacklogToDay } from "./tools/todo.js";
 import { saveArtifact, listArtifacts } from "./tools/artifact.js";
 import { getCalendarEvents, getCalendarEventById } from "./tools/calendar.js";
+import { linkTodoToListItem, unlinkTodoFromListItem, linkTodoToBookPage, unlinkTodoFromBookPage, createPageFromTodo, createListItemFromTodo } from "./tools/links.js";
+import {
+  listLists,
+  getList,
+  createList,
+  addListItem,
+  updateListItem,
+  deleteListItem,
+  type ListField,
+} from "./tools/lists.js";
+import {
+  listBooks,
+  getBook,
+  createBook,
+  addPage,
+  savePageContent,
+  loadPage,
+  updatePageMeta,
+} from "./tools/books.js";
+import type { AgentMessage } from "./types.js";
+import type { ChatProvider, ProviderMessage, ToolResult, ToolSchema } from "./providers/types.js";
+import { AnthropicProvider, wrapUserMessage as anthropicUser } from "./providers/anthropic.js";
+import { OpenRouterProvider, wrapUserMessage as openrouterUser } from "./providers/openrouter.js";
 
 const CONFIG_PATH = "/data/config/agent.json";
 
@@ -40,15 +63,13 @@ function verbosityInstruction(verbosity: PromptConfig["spec_verbosity"]): string
       return "When writing specs, use a balanced level of detail — clear and complete without being exhaustive.";
   }
 }
-import type { AgentMessage } from "./types.js";
-import { randomUUID } from "node:crypto";
 
-const tools: Anthropic.Tool[] = [
+const tools: ToolSchema[] = [
   {
     name: "read_file",
     description: "Read the contents of a file. The host data directory is mounted at /data.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         path: { type: "string", description: "File path under /data (e.g., /data/storage/2026/04/05/day.json)" },
       },
@@ -58,8 +79,8 @@ const tools: Anthropic.Tool[] = [
   {
     name: "write_file",
     description: "Write content to a file under /data.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         path: { type: "string", description: "File path under /data" },
         content: { type: "string", description: "File content" },
@@ -70,8 +91,8 @@ const tools: Anthropic.Tool[] = [
   {
     name: "list_directory",
     description: "List files and directories under /data.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         path: { type: "string", description: "Directory path under /data" },
       },
@@ -81,8 +102,8 @@ const tools: Anthropic.Tool[] = [
   {
     name: "exec_command",
     description: "Execute a shell command in the sandbox environment.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         command: { type: "string", description: "Shell command to execute" },
       },
@@ -94,8 +115,8 @@ const tools: Anthropic.Tool[] = [
     description:
       "Save a markdown spec for a todo item. This writes the spec file and sets has_spec=true on the todo. " +
       "The date is in YYYY-MM-DD format and the todo_id is the UUID of the todo item.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         date: { type: "string", description: "Date of the todo (YYYY-MM-DD)" },
         todo_id: { type: "string", description: "UUID of the todo item" },
@@ -107,8 +128,8 @@ const tools: Anthropic.Tool[] = [
   {
     name: "update_todo",
     description: "Update a todo item's title or completed status.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         date: { type: "string", description: "Date of the todo (YYYY-MM-DD)" },
         todo_id: { type: "string", description: "UUID of the todo item" },
@@ -121,12 +142,48 @@ const tools: Anthropic.Tool[] = [
   {
     name: "get_todos",
     description: "Get all todo items for a given date. Use this to look up todo IDs and see what the user is working on.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         date: { type: "string", description: "Date to query (YYYY-MM-DD). Defaults to today." },
       },
       required: [],
+    },
+  },
+  {
+    name: "get_backlog",
+    description:
+      "List all items in the general (undated) backlog. Returns titles, completion state, and ids. " +
+      "Use this when the user asks about backlog items or undated tasks.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "add_backlog_item",
+    description: "Add a new item to the general (undated) backlog.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "Item title" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "move_backlog_to_day",
+    description:
+      "Move a backlog item onto a specific day's todo list. Preserves the item's id and any attached spec. " +
+      "Use this when the user wants to schedule a backlog item for a particular date.",
+    parameters: {
+      type: "object",
+      properties: {
+        item_id: { type: "string", description: "UUID of the backlog item" },
+        date: { type: "string", description: "Target date (YYYY-MM-DD)" },
+      },
+      required: ["item_id", "date"],
     },
   },
   {
@@ -135,8 +192,8 @@ const tools: Anthropic.Tool[] = [
       "Save a reusable file (script, snippet, reference, markdown note) to the artifacts library. " +
       "Updates the index so the file appears in the Artifacts tab. " +
       "Use this for standalone reusable files, NOT for todo-attached docs (use save_spec for those).",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         name: { type: "string", description: "Filename (e.g., 'hello.py', 'notes.md'). Just the name, no path." },
         content: { type: "string", description: "File content" },
@@ -147,8 +204,8 @@ const tools: Anthropic.Tool[] = [
   {
     name: "list_artifacts",
     description: "List all saved artifacts with their names, sizes, and creation dates.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {},
       required: [],
     },
@@ -159,8 +216,8 @@ const tools: Anthropic.Tool[] = [
       "List upcoming Google Calendar events from the local cache. Returns events with id, summary, time, " +
       "location, meeting URL, and attendees. Use this to look up events the user is asking about. " +
       "Defaults to today + next 7 days.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         date: { type: "string", description: "Start date YYYY-MM-DD (defaults to today)" },
         days_ahead: { type: "number", description: "Number of days after start date to include (default 7)" },
@@ -174,35 +231,296 @@ const tools: Anthropic.Tool[] = [
       "Fetch full details for a specific calendar event by id. Returns the full event JSON " +
       "(summary, attendees, description, location, meeting URL). Use this when you need complete details " +
       "to craft a spec — e.g., the full description, full attendee list, or meeting agenda.",
-    input_schema: {
-      type: "object" as const,
+    parameters: {
+      type: "object",
       properties: {
         event_id: { type: "string", description: "Event id from calendar_events output" },
       },
       required: ["event_id"],
     },
   },
+  {
+    name: "link_todo_to_list_item",
+    description:
+      "Link a todo to an existing list item so they reference each other. Writes the link onto both " +
+      "the todo and the list item. Use `date` = the todo's date (YYYY-MM-DD), or empty string for a backlog item.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        list_id: { type: "string", description: "UUID of the list" },
+        item_id: { type: "string", description: "UUID of the item within the list" },
+      },
+      required: ["date", "todo_id", "list_id", "item_id"],
+    },
+  },
+  {
+    name: "unlink_todo_from_list_item",
+    description: "Remove the link between a todo and a list item (both sides).",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        list_id: { type: "string", description: "UUID of the list" },
+        item_id: { type: "string", description: "UUID of the item within the list" },
+      },
+      required: ["date", "todo_id", "list_id", "item_id"],
+    },
+  },
+  {
+    name: "link_todo_to_book_page",
+    description:
+      "Link a todo to an existing book page so they reference each other. Writes the link onto both " +
+      "the todo and the page. Use `date` = the todo's date (YYYY-MM-DD), or empty string for a backlog item.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        book_id: { type: "string", description: "UUID of the book" },
+        page_id: { type: "string", description: "UUID of the page within the book" },
+      },
+      required: ["date", "todo_id", "book_id", "page_id"],
+    },
+  },
+  {
+    name: "unlink_todo_from_book_page",
+    description: "Remove the link between a todo and a book page (both sides).",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        book_id: { type: "string", description: "UUID of the book" },
+        page_id: { type: "string", description: "UUID of the page within the book" },
+      },
+      required: ["date", "todo_id", "book_id", "page_id"],
+    },
+  },
+  {
+    name: "create_page_from_todo",
+    description:
+      "Create a NEW page in a book from a todo (e.g. log standup notes as a new page in the standup book). " +
+      "The page is titled after the todo and seeded with the todo's spec content; the todo and the new page " +
+      "are then linked on both sides. Look up the todo with get_todos and the book with list_books/get_book first.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        book_id: { type: "string", description: "UUID of the book to add the page to" },
+      },
+      required: ["date", "todo_id", "book_id"],
+    },
+  },
+  {
+    name: "create_list_item_from_todo",
+    description:
+      "Create a NEW item (row) in a list from a todo. The list's first text field is defaulted to the todo " +
+      "title; the todo and the new item are then linked on both sides. Look up the todo with get_todos and the " +
+      "list with list_lists/get_list first.",
+    parameters: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Todo's date YYYY-MM-DD, or empty string for a backlog item" },
+        todo_id: { type: "string", description: "UUID of the todo" },
+        list_id: { type: "string", description: "UUID of the list to add the item to" },
+      },
+      required: ["date", "todo_id", "list_id"],
+    },
+  },
+  {
+    name: "list_lists",
+    description: "List all of the user's lists (structured tables) with their ids, names, and last-updated times.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_list",
+    description:
+      "Get a single list by id, including its field definitions and all items (each with its id and values). " +
+      "Use this to look up list/item ids before adding, updating, deleting, or linking items.",
+    parameters: {
+      type: "object",
+      properties: {
+        list_id: { type: "string", description: "UUID of the list" },
+      },
+      required: ["list_id"],
+    },
+  },
+  {
+    name: "create_list",
+    description:
+      "Create a new list (a structured table). Define its columns via `fields`. Each field has a `key` " +
+      "(machine name used in item values), a `label` (display name), and a `kind` " +
+      "(one of: text, number, date, bool, select). For `select`, include an `options` string array.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name of the list" },
+        fields: {
+          type: "array",
+          description: "Column definitions for the list",
+          items: {
+            type: "object",
+            properties: {
+              key: { type: "string", description: "Machine name for the field (used as the key in item values)" },
+              label: { type: "string", description: "Human-readable column label" },
+              kind: {
+                type: "string",
+                description: "Field type",
+                enum: ["text", "number", "date", "bool", "select"],
+              },
+              options: {
+                type: "array",
+                description: "Allowed values when kind is 'select'",
+                items: { type: "string" },
+              },
+            },
+            required: ["key", "label", "kind"],
+          },
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "add_list_item",
+    description:
+      "Add a row to a list. `values` is an object keyed by the list's field keys " +
+      "(e.g. { name: \"Acme\", email: \"hi@acme.com\" }). Returns the updated list.",
+    parameters: {
+      type: "object",
+      properties: {
+        list_id: { type: "string", description: "UUID of the list" },
+        values: { type: "object", description: "Field values for the new item, keyed by field key" },
+      },
+      required: ["list_id", "values"],
+    },
+  },
+  {
+    name: "update_list_item",
+    description:
+      "Update an existing list item's values. `values` replaces the item's values object. " +
+      "Look up the item_id with get_list first.",
+    parameters: {
+      type: "object",
+      properties: {
+        list_id: { type: "string", description: "UUID of the list" },
+        item_id: { type: "string", description: "UUID of the item within the list" },
+        values: { type: "object", description: "New field values for the item, keyed by field key" },
+      },
+      required: ["list_id", "item_id", "values"],
+    },
+  },
+  {
+    name: "delete_list_item",
+    description: "Delete an item (row) from a list by id. Returns the updated list.",
+    parameters: {
+      type: "object",
+      properties: {
+        list_id: { type: "string", description: "UUID of the list" },
+        item_id: { type: "string", description: "UUID of the item within the list" },
+      },
+      required: ["list_id", "item_id"],
+    },
+  },
+  {
+    name: "list_books",
+    description: "List all of the user's books (collections of markdown pages) with their ids, names, and last-updated times.",
+    parameters: { type: "object", properties: {}, required: [] },
+  },
+  {
+    name: "get_book",
+    description:
+      "Get a book by id. Returns the book's metadata and table of contents (its pages with their ids, " +
+      "titles, and order). Use this to look up page ids before reading or updating a page.",
+    parameters: {
+      type: "object",
+      properties: {
+        book_id: { type: "string", description: "UUID of the book" },
+      },
+      required: ["book_id"],
+    },
+  },
+  {
+    name: "create_book",
+    description: "Create a new (empty) book. Use add_book_page to add pages afterward.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Display name of the book" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    name: "add_book_page",
+    description:
+      "Add a page to a book. Optionally provide initial markdown `content`. Returns the updated book " +
+      "(including the new page's id in its table of contents).",
+    parameters: {
+      type: "object",
+      properties: {
+        book_id: { type: "string", description: "UUID of the book" },
+        title: { type: "string", description: "Title of the new page" },
+        content: { type: "string", description: "Initial markdown content for the page (optional)" },
+      },
+      required: ["book_id", "title"],
+    },
+  },
+  {
+    name: "get_book_page",
+    description: "Get a single page's title and markdown content from a book.",
+    parameters: {
+      type: "object",
+      properties: {
+        book_id: { type: "string", description: "UUID of the book" },
+        page_id: { type: "string", description: "UUID of the page within the book" },
+      },
+      required: ["book_id", "page_id"],
+    },
+  },
+  {
+    name: "update_book_page",
+    description:
+      "Update a book page's title and/or markdown content. Omit `title` to keep the current title; " +
+      "omit `content` to keep the current content.",
+    parameters: {
+      type: "object",
+      properties: {
+        book_id: { type: "string", description: "UUID of the book" },
+        page_id: { type: "string", description: "UUID of the page within the book" },
+        title: { type: "string", description: "New page title (optional)" },
+        content: { type: "string", description: "New markdown content (optional)" },
+      },
+      required: ["book_id", "page_id"],
+    },
+  },
 ];
 
-// Anthropic server-managed tool for web search
-const serverTools: Anthropic.Messages.WebSearchTool20250305[] = [
-  { type: "web_search_20250305", name: "web_search" },
-];
+function pickProvider(): ChatProvider {
+  const which = (process.env.LLM_PROVIDER ?? "anthropic").toLowerCase();
+  if (which === "openrouter") return new OpenRouterProvider();
+  return new AnthropicProvider();
+}
 
-type ConversationMessage = Anthropic.MessageParam;
+function wrapUser(provider: ChatProvider, text: string): ProviderMessage {
+  return provider.name === "openrouter" ? openrouterUser(text) : anthropicUser(text);
+}
 
 export class Agent {
-  private client: Anthropic;
-  private history: ConversationMessage[] = [];
-  private model: string;
+  private provider: ChatProvider;
+  private history: ProviderMessage[] = [];
 
   constructor() {
-    this.client = new Anthropic();
-    this.model = process.env.ANTHROPIC_MODEL ?? "claude-sonnet-4-6";
+    this.provider = pickProvider();
+    console.log(`Agent using provider=${this.provider.name} model=${this.provider.model}`);
   }
 
   async chat(userMessage: string): Promise<AgentMessage> {
-    this.history.push({ role: "user", content: userMessage });
+    this.history.push(wrapUser(this.provider, userMessage));
 
     const today = new Date().toISOString().slice(0, 10);
     const promptConfig = loadPromptConfig();
@@ -212,8 +530,21 @@ export class Agent {
       "The user's data directory is mounted at /data. The storage structure is:\n" +
       "  /data/storage/YYYY/MM/DD/day.json   — day's todos\n" +
       "  /data/storage/YYYY/MM/DD/specs/{todo-id}.md — spec for a todo\n" +
+      "  /data/storage/backlog.json — the general (undated) backlog list\n" +
+      "  /data/storage/backlog/specs/{item-id}.md — spec for a backlog item\n" +
+      "  /data/storage/lists/{list-id}.json — a list (its fields + items)\n" +
+      "  /data/storage/books/{book-id}/book.json — a book's metadata + page table of contents\n" +
+      "  /data/storage/books/{book-id}/pages/{page-id}.md — a book page's markdown content\n" +
       "  /data/artifacts/ — reusable files\n\n" +
+      "The backlog is the user's general todo list with no due date. Use get_backlog to read it. " +
+      "When the user wants to schedule a backlog item for a specific day, use move_backlog_to_day.\n" +
       "When the user mentions a todo with @[title](id:UUID|date:YYYY-MM-DD), use the UUID and date directly.\n" +
+      "When the user mentions an artifact with @[name](artifact:relative/path), it lives at " +
+      "/data/artifacts/relative/path. If it's a file, use read_file to read its contents; if it's a " +
+      "folder, use list_directory to see what's inside (then read_file on specific files) when relevant.\n" +
+      "When the user mentions a list with @[name](list:<listId>) or @[name](list:<listId>/<itemId>), " +
+      "use the list/item tools with those ids. When the user mentions a book with @[name](book:<bookId>) " +
+      "or @[name](book:<bookId>/<pageId>), use the book/page tools with those ids.\n" +
       "When asked to create a spec for a todo, use the save_spec tool — don't write files manually.\n" +
       "When asked to save anything to artifacts (a script, snippet, note, reference, or any file " +
       "the user wants to keep around), you MUST use the save_artifact tool — NOT write_file. " +
@@ -221,6 +552,18 @@ export class Agent {
       "so the file appears in the user's Artifacts tab. " +
       "save_spec is for todo-attached docs; save_artifact is for standalone reusable files.\n" +
       "When you need to look up todos, use the get_todos tool.\n" +
+      "Lists are structured tables and books are collections of markdown pages. You MUST use the " +
+      "list_*/book_* tools (list_lists, get_list, create_list, add_list_item, update_list_item, " +
+      "delete_list_item, list_books, get_book, create_book, add_book_page, get_book_page, " +
+      "update_book_page) to work with them — NOT write_file. Those tools keep the indexes in sync so the " +
+      "changes appear in the Lists and Books tabs. Look up list/item and book/page ids with get_list / " +
+      "get_book before updating, deleting, or linking.\n" +
+      "Todos can be linked to list items and book pages. Use link_todo_to_list_item / link_todo_to_book_page " +
+      "(and the unlink_* variants) to connect them — the link is written onto both sides. Pass the todo's date " +
+      "(YYYY-MM-DD), or an empty string for a backlog item.\n" +
+      "To create a brand-new page or item FROM a todo (e.g. \"log my standup notes as a page in my standup book\"), " +
+      "look up the todo with get_todos then call create_page_from_todo / create_list_item_from_todo — these create " +
+      "the page/item seeded from the todo and link both sides in one step.\n" +
       "When the user references a meeting or calendar event, use calendar_events to list upcoming events " +
       "and calendar_event to fetch full details (attendees, description, meeting link). " +
       "To create a spec for an event, look up the matching todo with get_todos, then call save_spec.\n" +
@@ -233,54 +576,38 @@ export class Agent {
         promptConfig.user_context.trim();
     }
 
-    let response = await this.client.messages.create({
-      model: this.model,
-      max_tokens: 4096,
-      system: systemPrompt,
-      tools: [...tools, ...serverTools] as Anthropic.Tool[],
-      messages: this.history,
-    });
+    let turn = await this.provider.chat(systemPrompt, this.history, tools);
+    let accumulatedText = turn.text;
 
-    // Handle tool use loop
-    while (response.stop_reason === "tool_use") {
-      const toolResults: Anthropic.ToolResultBlockParam[] = [];
-
-      for (const block of response.content) {
-        if (block.type === "tool_use") {
-          const result = await this.executeTool(block.name, block.input as Record<string, string>);
-          toolResults.push({
-            type: "tool_result",
-            tool_use_id: block.id,
-            content: result,
-          });
-        }
+    while (turn.toolCalls.length > 0) {
+      const results: ToolResult[] = [];
+      for (const tc of turn.toolCalls) {
+        const result = await this.executeTool(tc.name, tc.input as Record<string, string>);
+        results.push({ toolCallId: tc.id, content: result });
       }
 
-      this.history.push({ role: "assistant", content: response.content });
-      this.history.push({ role: "user", content: toolResults });
+      this.appendAssistant(turn.rawAssistant);
+      this.history.push(this.provider.buildToolResultMessage(results));
 
-      response = await this.client.messages.create({
-        model: this.model,
-        max_tokens: 4096,
-        system: systemPrompt,
-        tools: [...tools, ...serverTools] as Anthropic.Tool[],
-        messages: this.history,
-      });
+      turn = await this.provider.chat(systemPrompt, this.history, tools);
+      if (turn.text) {
+        accumulatedText = accumulatedText ? `${accumulatedText}\n${turn.text}` : turn.text;
+      }
     }
 
-    const text = response.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
-
-    this.history.push({ role: "assistant", content: response.content });
+    this.appendAssistant(turn.rawAssistant);
 
     return {
       id: randomUUID(),
       role: "assistant",
-      content: text,
+      content: accumulatedText,
       timestamp: new Date().toISOString(),
     };
+  }
+
+  private appendAssistant(raw: unknown) {
+    // `raw` is a ProviderMessage that the provider returned in ChatTurn.rawAssistant
+    this.history.push(raw as ProviderMessage);
   }
 
   private async executeTool(name: string, input: Record<string, string>): Promise<string> {
@@ -300,6 +627,12 @@ export class Agent {
           return updateTodo(input.date, input.todo_id, input.title, input.completed as unknown as boolean | undefined);
         case "get_todos":
           return getTodosForDate(input.date);
+        case "get_backlog":
+          return getBacklogText();
+        case "add_backlog_item":
+          return JSON.stringify(addBacklogItem(input.title));
+        case "move_backlog_to_day":
+          return JSON.stringify(moveBacklogToDay(input.item_id, input.date));
         case "save_artifact":
           return saveArtifact(input.name, input.content);
         case "list_artifacts":
@@ -308,6 +641,64 @@ export class Agent {
           return getCalendarEvents(input.date, input.days_ahead as unknown as number | undefined);
         case "calendar_event":
           return getCalendarEventById(input.event_id);
+        case "link_todo_to_list_item":
+          return JSON.stringify(linkTodoToListItem(input.date ?? "", input.todo_id, input.list_id, input.item_id));
+        case "unlink_todo_from_list_item":
+          return JSON.stringify(unlinkTodoFromListItem(input.date ?? "", input.todo_id, input.list_id, input.item_id));
+        case "link_todo_to_book_page":
+          return JSON.stringify(linkTodoToBookPage(input.date ?? "", input.todo_id, input.book_id, input.page_id));
+        case "unlink_todo_from_book_page":
+          return JSON.stringify(unlinkTodoFromBookPage(input.date ?? "", input.todo_id, input.book_id, input.page_id));
+        case "create_page_from_todo":
+          return JSON.stringify(createPageFromTodo(input.date ?? "", input.todo_id, input.book_id));
+        case "create_list_item_from_todo":
+          return JSON.stringify(createListItemFromTodo(input.date ?? "", input.todo_id, input.list_id));
+        case "list_lists":
+          return JSON.stringify(listLists());
+        case "get_list":
+          return JSON.stringify(getList(input.list_id));
+        case "create_list":
+          return JSON.stringify(createList(input.name, (input.fields as unknown as ListField[]) ?? []));
+        case "add_list_item":
+          return JSON.stringify(addListItem(input.list_id, (input.values as unknown as Record<string, unknown>) ?? {}));
+        case "update_list_item":
+          return JSON.stringify(
+            updateListItem(input.list_id, {
+              id: input.item_id,
+              values: (input.values as unknown as Record<string, unknown>) ?? {},
+              linked_todos: [],
+              created_at: "",
+              updated_at: "",
+            }),
+          );
+        case "delete_list_item":
+          return JSON.stringify(deleteListItem(input.list_id, input.item_id));
+        case "list_books":
+          return JSON.stringify(listBooks());
+        case "get_book":
+          return JSON.stringify(getBook(input.book_id));
+        case "create_book":
+          return JSON.stringify(createBook(input.name));
+        case "add_book_page": {
+          let book = addPage(input.book_id, input.title);
+          if (input.content != null && input.content !== "") {
+            const page = book.pages[book.pages.length - 1];
+            book = savePageContent(input.book_id, page.id, input.content);
+          }
+          return JSON.stringify(book);
+        }
+        case "get_book_page": {
+          const book = getBook(input.book_id);
+          const page = book.pages.find((p) => p.id === input.page_id);
+          if (!page) throw new Error(`page ${input.page_id} not found`);
+          return JSON.stringify({ ...page, content: loadPage(input.book_id, input.page_id) });
+        }
+        case "update_book_page": {
+          let book = getBook(input.book_id);
+          if (input.title != null) book = updatePageMeta(input.book_id, input.page_id, input.title);
+          if (input.content != null) book = savePageContent(input.book_id, input.page_id, input.content);
+          return JSON.stringify(book);
+        }
         default:
           return `Unknown tool: ${name}`;
       }

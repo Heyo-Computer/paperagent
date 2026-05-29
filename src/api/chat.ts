@@ -1,5 +1,5 @@
-import { sendMessage, getDaysRange, listArtifacts } from "./commands";
-import { chatMessages, isAgentLoading, days, artifacts } from "../state/store";
+import { sendMessage, getDaysRange, listArtifacts, listAllArtifacts } from "./commands";
+import { chatMessages, isAgentLoading, days, artifacts, allArtifacts } from "../state/store";
 import type { TodoItem } from "../types";
 
 let msgCounter = 0;
@@ -33,6 +33,7 @@ export async function sendChatMessage(text: string): Promise<void> {
     chatMessages.value = [...chatMessages.value, response];
     getDaysRange().then((e) => { days.value = e; }).catch(() => {});
     listArtifacts().then((i) => { artifacts.value = i; }).catch(() => {});
+    listAllArtifacts().then((a) => { allArtifacts.value = a; }).catch(() => {});
   } catch (err) {
     chatMessages.value = [...chatMessages.value, {
       id: localId(), role: "assistant" as const, content: `${err}`, timestamp: new Date().toISOString(),

@@ -1,8 +1,9 @@
 import { useState, useEffect } from "preact/hooks";
-import { loadSpec, saveSpec } from "../../api/commands";
+import { loadSpec, saveSpec, unlinkTodoFromListItem, unlinkTodoFromBookPage, createPageFromTodo, createListItemFromTodo } from "../../api/commands";
 import { MarkdownRenderer } from "../markdown/MarkdownRenderer";
 import { useReadAloud } from "../../hooks/useReadAloud";
-import type { TodoItem } from "../../types";
+import { navigateToLink, allBooks, allLists, activeTab, pendingBookSelection, pendingListSelection } from "../../state/store";
+import type { TodoItem, LinkRef } from "../../types";
 
 interface TodoSpecProps {
   todo: TodoItem;
@@ -15,6 +16,7 @@ export function TodoSpec({ todo, date, onUpdate }: TodoSpecProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [sendOpen, setSendOpen] = useState(false);
   const { speaking, toggle: toggleSpeak, stop: stopSpeak } = useReadAloud();
 
   useEffect(() => {
@@ -41,11 +43,93 @@ export function TodoSpec({ todo, date, onUpdate }: TodoSpecProps) {
     setEditing(false);
   }
 
+  async function handleUnlink(link: LinkRef) {
+    if (link.kind === "list") {
+      await unlinkTodoFromListItem(date, todo.id, link.target_id, link.sub_id);
+    } else {
+      await unlinkTodoFromBookPage(date, todo.id, link.target_id, link.sub_id);
+    }
+    onUpdate({
+      ...todo,
+      links: (todo.links ?? []).filter(
+        (l) => !(l.kind === link.kind && l.target_id === link.target_id && l.sub_id === link.sub_id),
+      ),
+    });
+  }
+
+  async function handleSendToBook(bookId: string) {
+    setSendOpen(false);
+    const { page_id } = await createPageFromTodo(date, todo.id, bookId);
+    onUpdate({
+      ...todo,
+      links: [
+        ...(todo.links ?? []),
+        { kind: "book", target_id: bookId, sub_id: page_id, label: todo.title },
+      ],
+    });
+    pendingBookSelection.value = { bookId, pageId: page_id };
+    activeTab.value = "books";
+  }
+
+  async function handleSendToList(listId: string) {
+    setSendOpen(false);
+    const { item_id, list } = await createListItemFromTodo(date, todo.id, listId);
+    onUpdate({
+      ...todo,
+      links: [
+        ...(todo.links ?? []),
+        { kind: "list", target_id: listId, sub_id: item_id, label: list.name },
+      ],
+    });
+    pendingListSelection.value = { listId, itemId: item_id };
+    activeTab.value = "lists";
+  }
+
   // Stop speech when unmounting or switching to edit
   useEffect(() => () => stopSpeak(), []);
 
   return (
     <>
+      {todo.links && todo.links.length > 0 && (
+        <div class="todo-spec-links">
+          {todo.links.map((link) => (
+            <span
+              key={`${link.kind}:${link.target_id}/${link.sub_id}`}
+              class={`mention mention-${link.kind} todo-link-chip`}
+            >
+              <button class="todo-link-chip-label" onClick={() => navigateToLink(link)} title={`Open ${link.kind}`}>
+                {link.label || link.sub_id}
+              </button>
+              <button class="todo-link-unlink" onClick={() => handleUnlink(link)} title="Unlink">
+                ✕
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div class="todo-send">
+        <button class="btn btn-sm btn-ghost" onClick={() => setSendOpen((v) => !v)} title="Create a book page or list item from this todo">
+          Send to…
+        </button>
+        {sendOpen && (
+          <div class="todo-send-menu">
+            <div class="todo-send-section">Books</div>
+            {allBooks.value.length === 0 && <div class="todo-send-empty">No books</div>}
+            {allBooks.value.map((b) => (
+              <button key={`book-${b.id}`} class="todo-send-item" onClick={() => handleSendToBook(b.id)}>
+                + Page in {b.name}
+              </button>
+            ))}
+            <div class="todo-send-section">Lists</div>
+            {allLists.value.length === 0 && <div class="todo-send-empty">No lists</div>}
+            {allLists.value.map((l) => (
+              <button key={`list-${l.id}`} class="todo-send-item" onClick={() => handleSendToList(l.id)}>
+                + Item in {l.name}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div class="todo-spec">
         {editing ? (
           <>

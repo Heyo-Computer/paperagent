@@ -1,4 +1,4 @@
-import { expandedTodoId } from "../../state/store";
+import { expandedTodoId, navigateToLink } from "../../state/store";
 import { TodoSpec } from "./TodoSpec";
 import type { TodoItem as TodoItemType } from "../../types";
 
@@ -38,6 +38,20 @@ export function TodoItem({ todo, date, onToggle, onDelete, onUpdate }: TodoItemP
           </svg>
         </button>
       </div>
+      {!isExpanded && todo.links && todo.links.length > 0 && (
+        <div class="todo-links">
+          {todo.links.map((link) => (
+            <button
+              key={`${link.kind}:${link.target_id}/${link.sub_id}`}
+              class={`mention mention-${link.kind} todo-link-chip`}
+              onClick={(e) => { e.stopPropagation(); navigateToLink(link); }}
+              title={`Open ${link.kind}`}
+            >
+              {link.label || link.sub_id}
+            </button>
+          ))}
+        </div>
+      )}
       {isExpanded && (
         <TodoSpec todo={todo} date={date} onUpdate={onUpdate} />
       )}

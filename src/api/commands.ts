@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo } from "../types";
+import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo, Backlog, MoveBacklogResult, List, ListField, ListItem, ListSummary, Book, BookSummary } from "../types";
 
 // Storage commands
 export async function loadDay(date: string): Promise<DayEntry> {
@@ -30,6 +30,135 @@ export async function saveSpec(date: string, todoId: string, content: string): P
   return invoke("save_spec", { date, todoId, content });
 }
 
+// Backlog (undated) commands
+export async function loadBacklog(): Promise<Backlog> {
+  return invoke("load_backlog");
+}
+
+export async function addBacklogItem(title: string): Promise<Backlog> {
+  return invoke("add_backlog_item", { title });
+}
+
+export async function updateBacklogItem(item: TodoItem): Promise<Backlog> {
+  return invoke("update_backlog_item", { item });
+}
+
+export async function deleteBacklogItem(itemId: string): Promise<Backlog> {
+  return invoke("delete_backlog_item", { itemId });
+}
+
+export async function loadBacklogSpec(itemId: string): Promise<string> {
+  return invoke("load_backlog_spec", { itemId });
+}
+
+export async function saveBacklogSpec(itemId: string, content: string): Promise<void> {
+  return invoke("save_backlog_spec", { itemId, content });
+}
+
+export async function moveBacklogToDay(itemId: string, date: string): Promise<MoveBacklogResult> {
+  return invoke("move_backlog_to_day", { itemId, date });
+}
+
+// Lists commands
+export async function listLists(): Promise<ListSummary[]> {
+  return invoke("list_lists");
+}
+
+export async function loadList(listId: string): Promise<List> {
+  return invoke("load_list", { listId });
+}
+
+export async function createList(name: string, fields: ListField[]): Promise<List> {
+  return invoke("create_list", { name, fields });
+}
+
+export async function updateListMeta(listId: string, name: string, fields: ListField[]): Promise<List> {
+  return invoke("update_list_meta", { listId, name, fields });
+}
+
+export async function deleteList(listId: string): Promise<void> {
+  return invoke("delete_list", { listId });
+}
+
+export async function addListItem(listId: string, values: Record<string, unknown>): Promise<List> {
+  return invoke("add_list_item", { listId, values });
+}
+
+export async function updateListItem(listId: string, item: ListItem): Promise<List> {
+  return invoke("update_list_item", { listId, item });
+}
+
+export async function deleteListItem(listId: string, itemId: string): Promise<List> {
+  return invoke("delete_list_item", { listId, itemId });
+}
+
+// Books commands
+export async function listBooks(): Promise<BookSummary[]> {
+  return invoke("list_books");
+}
+
+export async function loadBook(bookId: string): Promise<Book> {
+  return invoke("load_book", { bookId });
+}
+
+export async function createBook(name: string): Promise<Book> {
+  return invoke("create_book", { name });
+}
+
+export async function deleteBook(bookId: string): Promise<void> {
+  return invoke("delete_book", { bookId });
+}
+
+export async function addPage(bookId: string, title: string): Promise<Book> {
+  return invoke("add_page", { bookId, title });
+}
+
+export async function loadPage(bookId: string, pageId: string): Promise<string> {
+  return invoke("load_page", { bookId, pageId });
+}
+
+export async function savePage(bookId: string, pageId: string, content: string): Promise<Book> {
+  return invoke("save_page", { bookId, pageId, content });
+}
+
+export async function updatePageMeta(bookId: string, pageId: string, title: string): Promise<Book> {
+  return invoke("update_page_meta", { bookId, pageId, title });
+}
+
+export async function reorderPages(bookId: string, orderedIds: string[]): Promise<Book> {
+  return invoke("reorder_pages", { bookId, orderedIds });
+}
+
+export async function deletePage(bookId: string, pageId: string): Promise<Book> {
+  return invoke("delete_page", { bookId, pageId });
+}
+
+// Links (bidirectional todo <-> list item / book page). `date` is empty for backlog todos.
+export async function linkTodoToListItem(date: string, todoId: string, listId: string, itemId: string): Promise<List> {
+  return invoke("link_todo_to_list_item", { date, todoId, listId, itemId });
+}
+
+export async function unlinkTodoFromListItem(date: string, todoId: string, listId: string, itemId: string): Promise<List> {
+  return invoke("unlink_todo_from_list_item", { date, todoId, listId, itemId });
+}
+
+export async function linkTodoToBookPage(date: string, todoId: string, bookId: string, pageId: string): Promise<Book> {
+  return invoke("link_todo_to_book_page", { date, todoId, bookId, pageId });
+}
+
+export async function unlinkTodoFromBookPage(date: string, todoId: string, bookId: string, pageId: string): Promise<Book> {
+  return invoke("unlink_todo_from_book_page", { date, todoId, bookId, pageId });
+}
+
+// Create a new page / list item FROM a todo, seeded from it and linked on both sides (T-011).
+export async function createPageFromTodo(date: string, todoId: string, bookId: string): Promise<{ book: Book; page_id: string }> {
+  return invoke("create_page_from_todo", { date, todoId, bookId });
+}
+
+export async function createListItemFromTodo(date: string, todoId: string, listId: string): Promise<{ list: List; item_id: string }> {
+  return invoke("create_list_item_from_todo", { date, todoId, listId });
+}
+
 // Theme commands
 export async function getTheme(): Promise<Theme> {
   return invoke("get_theme");
@@ -56,6 +185,10 @@ export async function vmStatus(): Promise<string> {
   return invoke("vm_status");
 }
 
+export async function listSandboxes(): Promise<string[]> {
+  return invoke("list_sandboxes");
+}
+
 // Agent commands
 export async function setupAgent(): Promise<string> {
   return invoke("setup_agent");
@@ -67,6 +200,10 @@ export async function startAgent(): Promise<void> {
 
 export async function stopAgent(): Promise<void> {
   return invoke("stop_agent");
+}
+
+export async function updateAgent(): Promise<string> {
+  return invoke("update_agent");
 }
 
 export async function sendMessage(message: string): Promise<AgentMessage> {
@@ -82,16 +219,41 @@ export async function getChatHistory(date: string): Promise<AgentMessage[]> {
 }
 
 // Artifact commands
-export async function listArtifacts(): Promise<Artifact[]> {
-  return invoke("list_artifacts");
+export async function listArtifacts(dir?: string): Promise<Artifact[]> {
+  return invoke("list_artifacts", { dir: dir ?? "" });
 }
 
-export async function readArtifact(name: string): Promise<string> {
-  return invoke("read_artifact", { name });
+// Flattened recursive listing of every file and folder — used for @-mentions.
+export async function listAllArtifacts(): Promise<Artifact[]> {
+  return invoke("list_all_artifacts");
 }
 
-export async function deleteArtifact(name: string): Promise<void> {
-  return invoke("delete_artifact", { name });
+export async function readArtifact(path: string): Promise<string> {
+  return invoke("read_artifact", { path });
+}
+
+export async function saveArtifact(path: string, content: string): Promise<Artifact> {
+  return invoke("save_artifact", { path, content });
+}
+
+export async function deleteArtifact(path: string): Promise<void> {
+  return invoke("delete_artifact", { path });
+}
+
+export async function createArtifactFolder(path: string): Promise<Artifact> {
+  return invoke("create_artifact_folder", { path });
+}
+
+export async function renameArtifact(path: string, newName: string): Promise<Artifact> {
+  return invoke("rename_artifact", { path, newName });
+}
+
+export async function moveArtifact(path: string, targetDir: string): Promise<Artifact> {
+  return invoke("move_artifact", { path, targetDir });
+}
+
+export async function listArtifactFolders(): Promise<string[]> {
+  return invoke("list_artifact_folders");
 }
 
 // Config commands

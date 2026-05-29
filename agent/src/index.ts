@@ -10,7 +10,45 @@ import {
   deleteTodo,
   loadSpecContent,
   saveTodoSpec,
+  loadBacklog,
+  addBacklogItem,
+  updateBacklogEntry,
+  deleteBacklogItem,
+  loadBacklogSpec,
+  saveBacklogSpecContent,
+  moveBacklogToDay,
 } from "./tools/todo.js";
+import {
+  listLists,
+  getList,
+  createList,
+  updateListMeta,
+  deleteList,
+  addListItem,
+  updateListItem,
+  deleteListItem,
+} from "./tools/lists.js";
+import type { ListField, ListItem } from "./tools/lists.js";
+import {
+  listBooks,
+  getBook,
+  createBook,
+  deleteBook,
+  addPage,
+  loadPage,
+  savePageContent,
+  updatePageMeta,
+  reorderPages,
+  deletePage,
+} from "./tools/books.js";
+import {
+  linkTodoToListItem,
+  unlinkTodoFromListItem,
+  linkTodoToBookPage,
+  unlinkTodoFromBookPage,
+  createPageFromTodo,
+  createListItemFromTodo,
+} from "./tools/links.js";
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 8080);
@@ -114,6 +152,189 @@ app.post("/rpc", async (req, res) => {
         const content = p.content as string;
         saveTodoSpec(date, todoId, content);
         res.json(makeResponse(request.id, { ok: true }));
+        break;
+      }
+
+      case "storage/load_backlog": {
+        res.json(makeResponse(request.id, loadBacklog()));
+        break;
+      }
+
+      case "storage/add_backlog_item": {
+        const title = p.title as string;
+        res.json(makeResponse(request.id, addBacklogItem(title)));
+        break;
+      }
+
+      case "storage/update_backlog_item": {
+        const item = p.item as { id: string; title: string; completed: boolean; has_spec: boolean; created_at: string; updated_at: string };
+        res.json(makeResponse(request.id, updateBacklogEntry(item)));
+        break;
+      }
+
+      case "storage/delete_backlog_item": {
+        const itemId = p.item_id as string;
+        res.json(makeResponse(request.id, deleteBacklogItem(itemId)));
+        break;
+      }
+
+      case "storage/load_backlog_spec": {
+        const itemId = p.item_id as string;
+        res.json(makeResponse(request.id, loadBacklogSpec(itemId)));
+        break;
+      }
+
+      case "storage/save_backlog_spec": {
+        const itemId = p.item_id as string;
+        const content = p.content as string;
+        saveBacklogSpecContent(itemId, content);
+        res.json(makeResponse(request.id, { ok: true }));
+        break;
+      }
+
+      case "storage/move_backlog_to_day": {
+        const itemId = p.item_id as string;
+        const date = p.date as string;
+        res.json(makeResponse(request.id, moveBacklogToDay(itemId, date)));
+        break;
+      }
+
+      // ── Lists RPCs ──
+
+      case "lists/list_lists": {
+        res.json(makeResponse(request.id, listLists()));
+        break;
+      }
+
+      case "lists/load_list": {
+        res.json(makeResponse(request.id, getList(p.list_id as string)));
+        break;
+      }
+
+      case "lists/create_list": {
+        const name = p.name as string;
+        const fields = (p.fields as ListField[]) ?? [];
+        res.json(makeResponse(request.id, createList(name, fields)));
+        break;
+      }
+
+      case "lists/update_list_meta": {
+        const listId = p.list_id as string;
+        const name = p.name as string;
+        const fields = (p.fields as ListField[]) ?? [];
+        res.json(makeResponse(request.id, updateListMeta(listId, name, fields)));
+        break;
+      }
+
+      case "lists/delete_list": {
+        deleteList(p.list_id as string);
+        res.json(makeResponse(request.id, { ok: true }));
+        break;
+      }
+
+      case "lists/add_list_item": {
+        const listId = p.list_id as string;
+        const values = (p.values as Record<string, unknown>) ?? {};
+        res.json(makeResponse(request.id, addListItem(listId, values)));
+        break;
+      }
+
+      case "lists/update_list_item": {
+        const listId = p.list_id as string;
+        const item = p.item as ListItem;
+        res.json(makeResponse(request.id, updateListItem(listId, item)));
+        break;
+      }
+
+      case "lists/delete_list_item": {
+        const listId = p.list_id as string;
+        const itemId = p.item_id as string;
+        res.json(makeResponse(request.id, deleteListItem(listId, itemId)));
+        break;
+      }
+
+      // ── Books RPCs ──
+
+      case "books/list_books": {
+        res.json(makeResponse(request.id, listBooks()));
+        break;
+      }
+
+      case "books/load_book": {
+        res.json(makeResponse(request.id, getBook(p.book_id as string)));
+        break;
+      }
+
+      case "books/create_book": {
+        res.json(makeResponse(request.id, createBook(p.name as string)));
+        break;
+      }
+
+      case "books/delete_book": {
+        deleteBook(p.book_id as string);
+        res.json(makeResponse(request.id, { ok: true }));
+        break;
+      }
+
+      case "books/add_page": {
+        res.json(makeResponse(request.id, addPage(p.book_id as string, p.title as string)));
+        break;
+      }
+
+      case "books/load_page": {
+        res.json(makeResponse(request.id, loadPage(p.book_id as string, p.page_id as string)));
+        break;
+      }
+
+      case "books/save_page": {
+        res.json(makeResponse(request.id, savePageContent(p.book_id as string, p.page_id as string, p.content as string)));
+        break;
+      }
+
+      case "books/update_page_meta": {
+        res.json(makeResponse(request.id, updatePageMeta(p.book_id as string, p.page_id as string, p.title as string)));
+        break;
+      }
+
+      case "books/reorder_pages": {
+        res.json(makeResponse(request.id, reorderPages(p.book_id as string, (p.ordered_ids as string[]) ?? [])));
+        break;
+      }
+
+      case "books/delete_page": {
+        res.json(makeResponse(request.id, deletePage(p.book_id as string, p.page_id as string)));
+        break;
+      }
+
+      // ── Links RPCs ──
+
+      case "links/link_todo_to_list_item": {
+        res.json(makeResponse(request.id, linkTodoToListItem(p.date as string, p.todo_id as string, p.list_id as string, p.item_id as string)));
+        break;
+      }
+
+      case "links/unlink_todo_from_list_item": {
+        res.json(makeResponse(request.id, unlinkTodoFromListItem(p.date as string, p.todo_id as string, p.list_id as string, p.item_id as string)));
+        break;
+      }
+
+      case "links/link_todo_to_book_page": {
+        res.json(makeResponse(request.id, linkTodoToBookPage(p.date as string, p.todo_id as string, p.book_id as string, p.page_id as string)));
+        break;
+      }
+
+      case "links/unlink_todo_from_book_page": {
+        res.json(makeResponse(request.id, unlinkTodoFromBookPage(p.date as string, p.todo_id as string, p.book_id as string, p.page_id as string)));
+        break;
+      }
+
+      case "links/create_page_from_todo": {
+        res.json(makeResponse(request.id, createPageFromTodo(p.date as string, p.todo_id as string, p.book_id as string)));
+        break;
+      }
+
+      case "links/create_list_item_from_todo": {
+        res.json(makeResponse(request.id, createListItemFromTodo(p.date as string, p.todo_id as string, p.list_id as string)));
         break;
       }
 

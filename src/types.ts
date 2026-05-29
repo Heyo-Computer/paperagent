@@ -1,8 +1,16 @@
+export interface LinkRef {
+  kind: "list" | "book";
+  target_id: string;
+  sub_id: string;
+  label?: string;
+}
+
 export interface TodoItem {
   id: string;
   title: string;
   completed: boolean;
   has_spec: boolean;
+  links?: LinkRef[];
   created_at: string;
   updated_at: string;
 }
@@ -10,6 +18,76 @@ export interface TodoItem {
 export interface DayEntry {
   date: string;
   todos: TodoItem[];
+}
+
+export interface Backlog {
+  items: TodoItem[];
+}
+
+export interface MoveBacklogResult {
+  backlog: Backlog;
+  day: DayEntry;
+}
+
+export type FieldKind = "text" | "number" | "date" | "bool" | "select";
+
+export interface ListField {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  options?: string[] | null;
+}
+
+export interface TodoRef {
+  date: string;
+  todo_id: string;
+  label?: string;
+}
+
+export interface ListItem {
+  id: string;
+  values: Record<string, unknown>;
+  linked_todos: TodoRef[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface List {
+  id: string;
+  name: string;
+  fields: ListField[];
+  items: ListItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListSummary {
+  id: string;
+  name: string;
+  updated_at: string;
+}
+
+export interface BookPage {
+  id: string;
+  title: string;
+  order: number;
+  linked_todos: TodoRef[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Book {
+  id: string;
+  name: string;
+  pages: BookPage[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BookSummary {
+  id: string;
+  name: string;
+  updated_at: string;
 }
 
 export interface AgentMessage {
@@ -22,8 +100,10 @@ export interface AgentMessage {
 export interface Artifact {
   name: string;
   path: string;
+  relative_path: string;
   size: number;
   created_at: string;
+  is_dir: boolean;
 }
 
 export type ShaderBackground =
@@ -68,7 +148,7 @@ export interface Theme {
   backgroundOpacity?: number;
 }
 
-export type ViewTab = "day" | "week" | "month" | "artifacts";
+export type ViewTab = "day" | "week" | "month" | "backlog" | "lists" | "books" | "artifacts";
 
 export type AgentStatus = "disconnected" | "starting" | "running" | "error";
 
@@ -97,6 +177,9 @@ export interface AgentConfig {
   spec_verbosity: SpecVerbosity;
   user_context: string;
   theme_name: string;
+  llm_provider: "anthropic" | "openrouter";
+  openrouter_api_key: string;
+  openrouter_model: string;
 }
 
 export interface CalendarConfig {

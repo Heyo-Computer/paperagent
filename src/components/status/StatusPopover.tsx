@@ -4,6 +4,7 @@ import {
   getStatusInfo, stopVm, setupAgent, startAgent, stopAgent, getRecentLogs,
   getCalendarStatus, syncCalendarToTodos,
   deployAgent, connectRemote, disconnectRemote, teardownDeploy,
+  listSandboxes, getAgentConfig, setAgentConfig, updateAgent,
 } from "../../api/commands";
 import { listen } from "@tauri-apps/api/event";
 import type { StatusInfo, CalendarStatus } from "../../types";
@@ -55,6 +56,9 @@ export function StatusPopover() {
   const [connectingRemote, setConnectingRemote] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [existingSandboxes, setExistingSandboxes] = useState<string[]>([]);
+  const [showSandboxPicker, setShowSandboxPicker] = useState(false);
+  const [selectedSandbox, setSelectedSandbox] = useState("");
 
   function refresh() {
     setLoading(true);
@@ -74,9 +78,13 @@ export function StatusPopover() {
       refresh();
       setShowLogs(false);
       setCopied(false);
+      setShowSandboxPicker(false);
       getCalendarStatus()
         .then(setCalStatus)
         .catch(() => setCalStatus(null));
+      listSandboxes()
+        .then(setExistingSandboxes)
+        .catch(() => setExistingSandboxes([]));
     }
   }, [statusPopoverOpen.value]);
 
@@ -131,6 +139,31 @@ export function StatusPopover() {
     }
   }
 
+  async function handleAttachExisting() {
+    if (!selectedSandbox) return;
+    setSetupRunning(true);
+    setSetupProgress(`Attaching to '${selectedSandbox}'...`);
+    setActionMsg("");
+    agentStatus.value = "starting";
+    try {
+      const cfg = await getAgentConfig();
+      await setAgentConfig({ ...cfg, vm_name: selectedSandbox });
+      const result = await setupAgent();
+      setActionMsg(result);
+      agentStatus.value = "running";
+      setShowSandboxPicker(false);
+      refresh();
+    } catch (e) {
+      setActionMsg(`Attach failed: ${e}`);
+      agentStatus.value = "error";
+      setShowLogs(true);
+      loadLogs();
+    } finally {
+      setSetupRunning(false);
+      setSetupProgress("");
+    }
+  }
+
   async function handleStopVm() {
     setActionMsg("");
     try {
@@ -139,6 +172,26 @@ export function StatusPopover() {
       refresh();
     } catch (e) {
       setActionMsg(`Error: ${e}`);
+    }
+  }
+
+  async function handleUpdateAgent() {
+    setSetupRunning(true);
+    setSetupProgress("Updating agent...");
+    setActionMsg("");
+    try {
+      const result = await updateAgent();
+      setActionMsg(result);
+      agentStatus.value = "running";
+      refresh();
+    } catch (e) {
+      setActionMsg(`Update failed: ${e}`);
+      agentStatus.value = "error";
+      setShowLogs(true);
+      loadLogs();
+    } finally {
+      setSetupRunning(false);
+      setSetupProgress("");
     }
   }
 
@@ -356,11 +409,42 @@ export function StatusPopover() {
                 {!setupRunning && info.heyvm_available && needsSetup && (
                   <div class="setup-section">
                     <div class="setup-description">
-                      Set up the sandbox and start the agent in one step.
+                      Create a new VM with image <code>todo-agent</code> on the KVM backend, or attach to an existing sandbox.
                     </div>
                     <button class="btn btn-sm btn-primary setup-btn" onClick={handleFullSetup}>
-                      Set Up Agent
+                      Create New VM
                     </button>
+                    {existingSandboxes.length > 0 && (
+                      <button
+                        class="btn btn-sm btn-ghost setup-btn"
+                        onClick={() => setShowSandboxPicker(!showSandboxPicker)}
+                        style={{ marginTop: "6px" }}
+                      >
+                        {showSandboxPicker ? "Hide existing sandboxes" : `Use existing sandbox (${existingSandboxes.length})`}
+                      </button>
+                    )}
+                    {showSandboxPicker && (
+                      <div class="status-connect-section" style={{ marginTop: "6px" }}>
+                        <select
+                          class="settings-select"
+                          value={selectedSandbox}
+                          onChange={(e) => setSelectedSandbox((e.target as HTMLSelectElement).value)}
+                        >
+                          <option value="">— Pick a sandbox —</option>
+                          {existingSandboxes.map((n) => (
+                            <option key={n} value={n}>{n}</option>
+                          ))}
+                        </select>
+                        <button
+                          class="btn btn-sm btn-primary"
+                          onClick={handleAttachExisting}
+                          disabled={!selectedSandbox}
+                          style={{ marginTop: "6px" }}
+                        >
+                          Attach
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -380,6 +464,9 @@ export function StatusPopover() {
                     )}
                     {(info.agent_status === "running" || info.agent_status === "unreachable") && (
                       <button class="btn btn-sm btn-secondary" onClick={handleStopAgent}>Stop Agent</button>
+                    )}
+                    {info.sandbox_status === "running" && (
+                      <button class="btn btn-sm btn-secondary" onClick={handleUpdateAgent}>Update Agent</button>
                     )}
                     {info.sandbox_status === "running" && (
                       <button class="btn btn-sm btn-secondary" onClick={handleStopVm}>Stop VM</button>

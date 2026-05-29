@@ -40,7 +40,7 @@ pub async fn deploy_agent(
         config.heyo_cloud_url.clone()
     };
     let deploy_name = if config.vm_name.is_empty() {
-        "txture-agent-cloud".to_string()
+        "todo-agent-cloud".to_string()
     } else {
         format!("{}-cloud", config.vm_name)
     };
@@ -54,7 +54,7 @@ pub async fn deploy_agent(
     progress(&app, "Archiving agent code...");
     let agent_src = super::agent::resolve_agent_source(&app)?;
     let agent_path = agent_src.to_string_lossy().to_string();
-    let archive_name = format!("txture-agent-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    let archive_name = format!("todo-agent-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     let archive_output = heyvm::archive_dir(&agent_path, &archive_name, "/data", &cloud_url)
         .map_err(|e| format!("Failed to archive agent code: {}", e))?;
     logging::info(&format!("deploy_agent: archive output: {}", archive_output.trim()));

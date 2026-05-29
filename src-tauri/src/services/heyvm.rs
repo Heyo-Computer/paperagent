@@ -90,6 +90,7 @@ pub fn create_sandbox_with_backend(
         "--name", name,
         "--backend-type", backend,
         "--type", "shell",
+        "--no-ttl",
         "--mount", &format!("{}:/data", data_dir),
     ]);
     if let Some(img) = image {
@@ -108,8 +109,109 @@ pub fn create_sandbox_with_backend(
         .map_err(|e| format!("create: failed to parse output: {} (raw: {})", e, raw.trim()))
 }
 
+/// Build a Firecracker/KVM rootfs image from a Dockerfile.
+pub fn build_image(dockerfile: &std::path::Path, name: &str) -> Result<String, String> {
+    logging::info(&format!("[heyvm] build_image: dockerfile={}, name={}", dockerfile.display(), name));
+    let mut cmd = heyvm_cmd();
+    cmd.args([
+        "mvm", "build",
+        "--local-only",
+        "-f", &dockerfile.to_string_lossy(),
+        "-n", name,
+    ]);
+    run("mvm_build", &mut cmd)
+}
+
+/// Run `heyvm get <name> --format json` and return the parsed object.
+fn get_sandbox_json(name: &str) -> Option<serde_json::Value> {
+    let output = heyvm_cmd().args(["get", name, "--format", "json"]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+/// Get a sandbox's ID by name/slug.
+pub fn sandbox_id(name: &str) -> Option<String> {
+    get_sandbox_json(name)?
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Guest IP for a KVM/Firecracker sandbox. Prefers the `guest_ip` field
+/// from `heyvm get` (added in newer heyvm versions); falls back to
+/// deriving it from the host's `tap-kv-<suffix>` /30 address for older
+/// versions.
+pub fn kvm_guest_ip(name_or_id: &str) -> Option<String> {
+    if let Some(info) = get_sandbox_json(name_or_id) {
+        if let Some(ip) = info.get("guest_ip").and_then(|v| v.as_str()) {
+            return Some(ip.to_string());
+        }
+        if let Some(id) = info.get("id").and_then(|v| v.as_str()) {
+            return derive_kvm_guest_ip_from_tap(id);
+        }
+    }
+    derive_kvm_guest_ip_from_tap(name_or_id)
+}
+
+/// Fallback for older heyvm versions: parse `ip -j addr show tap-kv-<suffix>`
+/// and derive the guest /30 peer by flipping the last two bits of the
+/// host octet.
+fn derive_kvm_guest_ip_from_tap(sandbox_id: &str) -> Option<String> {
+    let suffix = sandbox_id.strip_prefix("sb-").unwrap_or(sandbox_id);
+    let iface = format!("tap-kv-{}", suffix);
+    let output = std::process::Command::new("ip")
+        .args(["-j", "addr", "show", &iface])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).ok()?;
+    let host_ip_str = value
+        .as_array()?
+        .first()?
+        .get("addr_info")?
+        .as_array()?
+        .iter()
+        .find_map(|info| {
+            if info.get("family").and_then(|v| v.as_str()) == Some("inet") {
+                info.get("local").and_then(|v| v.as_str()).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })?;
+    let host: std::net::Ipv4Addr = host_ip_str.parse().ok()?;
+    let mut octets = host.octets();
+    octets[3] ^= 0x03;
+    Some(std::net::Ipv4Addr::from(octets).to_string())
+}
+
+/// List sandbox names (local + cloud) from `heyvm list`. Skips the header rows.
+pub fn list_sandbox_names() -> Result<Vec<String>, String> {
+    let output = list_sandboxes()?;
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('-') {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split_whitespace().collect();
+        if cols.len() < 3 || cols[0] == "NAME" {
+            continue;
+        }
+        names.push(cols[0].to_string());
+    }
+    Ok(names)
+}
+
 pub fn start_sandbox(name: &str) -> Result<String, String> {
     run("start", heyvm_cmd().args(["start", name]))
+}
+
+pub fn rm_sandbox(name: &str) -> Result<String, String> {
+    run("rm", heyvm_cmd().args(["rm", name, "--yes"]))
 }
 
 pub fn stop_sandbox(name: &str) -> Result<String, String> {

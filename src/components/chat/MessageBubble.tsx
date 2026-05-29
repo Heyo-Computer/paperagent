@@ -1,4 +1,5 @@
 import { MarkdownRenderer } from "../markdown/MarkdownRenderer";
+import { MentionText, navigateFromMention } from "../markdown/mentions";
 import type { AgentMessage } from "../../types";
 
 interface MessageBubbleProps {
@@ -16,7 +17,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       {message.role === "assistant" ? (
         <MarkdownRenderer content={message.content} />
       ) : (
-        <span>{message.content}</span>
+        <span onClick={(e) => navigateFromMention(e.target)}><MentionText content={message.content} /></span>
       )}
       <div class="chat-bubble-time">{time}</div>
     </div>

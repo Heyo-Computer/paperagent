@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use super::link::LinkRef;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TodoItem {
     pub id: String,
@@ -7,6 +9,9 @@ pub struct TodoItem {
     pub completed: bool,
     #[serde(default)]
     pub has_spec: bool,
+    /// Outgoing links from this todo to list items / book pages (T-009).
+    #[serde(default)]
+    pub links: Vec<LinkRef>,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]
@@ -27,4 +32,10 @@ impl DayEntry {
             todos: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Backlog {
+    #[serde(default)]
+    pub items: Vec<TodoItem>,
 }

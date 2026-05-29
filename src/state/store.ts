@@ -1,5 +1,5 @@
 import { signal } from "@preact/signals";
-import type { DayEntry, TodoItem, AgentMessage, Artifact, ViewTab, AgentStatus, AgentMode } from "../types";
+import type { DayEntry, TodoItem, AgentMessage, Artifact, ViewTab, AgentStatus, AgentMode, ListSummary, BookSummary, LinkRef, TodoRef } from "../types";
 
 // Navigation — tabs above the chat
 export const activeTab = signal<ViewTab>("day");
@@ -28,8 +28,46 @@ export const agentStatus = signal<AgentStatus>("disconnected");
 export const agentMode = signal<AgentMode>("local");
 export const deployUrl = signal<string | null>(null);
 
-// Artifacts
+// Artifacts — `artifacts` is the current-folder view (Artifacts panel);
+// `allArtifacts` is the flat recursive list used for @-mention candidates.
 export const artifacts = signal<Artifact[]>([]);
+export const allArtifacts = signal<Artifact[]>([]);
+
+// Lists — `allLists` is the summary list used for the Lists tab and @-mention candidates (T-009).
+export const allLists = signal<ListSummary[]>([]);
+
+// Books — `allBooks` is the summary list used for the Books tab and @-mention candidates (T-009).
+export const allBooks = signal<BookSummary[]>([]);
+
+// Cross-tab navigation requests (T-009). Set by a link chip click; the target panel
+// reads and clears it to open the requested list/item or book/page.
+export const pendingListSelection = signal<{ listId: string; itemId?: string } | null>(null);
+export const pendingBookSelection = signal<{ bookId: string; pageId?: string } | null>(null);
+
+// Cross-tab navigation request toward a todo (set by a linked-todo chip click on a
+// list item / book page). The Day tab reads and clears it after loading the day.
+export const pendingTodoSelection = signal<{ date: string; todoId: string } | null>(null);
+
+// Navigate to the target of a todo->list/book link (chip click on a todo).
+export function navigateToLink(link: LinkRef): void {
+  if (link.kind === "list") {
+    pendingListSelection.value = { listId: link.target_id, itemId: link.sub_id };
+    activeTab.value = "lists";
+  } else {
+    pendingBookSelection.value = { bookId: link.target_id, pageId: link.sub_id };
+    activeTab.value = "books";
+  }
+}
+
+// Navigate to a todo referenced from a list item / book page (chip click on a panel).
+export function navigateToTodo(ref: TodoRef): void {
+  if (ref.date) {
+    pendingTodoSelection.value = { date: ref.date, todoId: ref.todo_id };
+    activeTab.value = "day";
+  } else {
+    activeTab.value = "backlog";
+  }
+}
 
 // Theme
 export const currentThemeName = signal<string>("dark");
@@ -38,7 +76,7 @@ export const currentThemeName = signal<string>("dark");
 export const settingsOpen = signal<boolean>(false);
 
 // Agent name (mirrors vm_name from config, shown as app title)
-export const agentName = signal<string>("txture");
+export const agentName = signal<string>("planner");
 
 // Status popover
 export const statusPopoverOpen = signal<boolean>(false);

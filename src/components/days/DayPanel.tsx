@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { viewedDate, todayString, formatDate, expandedTodoId, isAgentLoading } from "../../state/store";
+import { viewedDate, todayString, formatDate, expandedTodoId, isAgentLoading, updateDayTodos, pendingTodoSelection } from "../../state/store";
 import { sendChatMessage, buildSummaryPrompt } from "../../api/chat";
 import { loadDay, saveTodo, updateTodo as updateTodoCmd, deleteTodo as deleteTodoCmd } from "../../api/commands";
 import { TodoItem } from "../todos/TodoItem";
@@ -37,6 +37,8 @@ export function DayPanel() {
     try {
       const e = await loadDay(date);
       setEntry(e);
+      // Mirror into the shared signal so @-mentions reflect this day's edits.
+      updateDayTodos(date, e.todos);
     } catch {
       setEntry({ date, todos: [] });
     } finally {
@@ -46,8 +48,26 @@ export function DayPanel() {
 
   useEffect(() => {
     reload();
-    expandedTodoId.value = null;
+    const sel = pendingTodoSelection.value;
+    if (sel && sel.date === date) {
+      expandedTodoId.value = sel.todoId;
+      pendingTodoSelection.value = null;
+    } else {
+      expandedTodoId.value = null;
+    }
   }, [date]);
+
+  // A linked-todo chip on another tab requested this todo; switch day if needed.
+  useEffect(() => {
+    const sel = pendingTodoSelection.value;
+    if (!sel) return;
+    if (sel.date !== viewedDate.value) {
+      viewedDate.value = sel.date; // triggers the [date] effect, which expands + clears
+    } else {
+      expandedTodoId.value = sel.todoId;
+      pendingTodoSelection.value = null;
+    }
+  }, [pendingTodoSelection.value]);
 
   async function handleAdd(title: string) {
     await saveTodo(date, title);

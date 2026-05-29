@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from "preact/hooks";
-import { days } from "../../state/store";
+import { days, allArtifacts, allLists, allBooks } from "../../state/store";
 import { useVoiceInput, voiceState, voiceError } from "../../hooks/useVoiceInput";
 import { describeImage } from "../../api/commands";
-import type { TodoItem } from "../../types";
+import type { TodoItem, Artifact, ListSummary, BookSummary } from "../../types";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
@@ -29,16 +29,15 @@ function fileToBase64(file: File): Promise<{ base64: string; dataUrl: string }> 
   });
 }
 
-interface MentionOption {
-  todo: TodoItem;
-  date: string;
-}
+type MentionOption =
+  | { kind: "todo"; key: string; label: string; sub: string; todo: TodoItem; date: string }
+  | { kind: "artifact"; key: string; label: string; sub: string; artifact: Artifact }
+  | { kind: "list"; key: string; label: string; sub: string; list: ListSummary }
+  | { kind: "book"; key: string; label: string; sub: string; book: BookSummary };
 
 interface ActiveMention {
-  display: string; // e.g. "@Buy groceries"
-  title: string;
-  id: string;
-  date: string;
+  display: string; // visible text in the textarea, e.g. "@Buy groceries"
+  token: string;   // agent-readable token, e.g. "@[Buy groceries](id:…|date:…)"
 }
 
 export function ChatInput({ onSend, disabled }: ChatInputProps) {
@@ -122,14 +121,13 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     target.value = "";
   }
 
-  // Expand visible @title mentions into the agent-readable format on submit.
+  // Expand visible @label mentions into the agent-readable token on submit.
   function expandMentions(visible: string): string {
     let result = visible;
-    // Sort by display length descending so longer titles match before substrings
+    // Sort by display length descending so longer labels match before substrings
     const sorted = [...mentions].sort((a, b) => b.display.length - a.display.length);
     for (const m of sorted) {
-      const expanded = `@[${m.title}](id:${m.id}|date:${m.date})`;
-      result = result.split(m.display).join(expanded);
+      result = result.split(m.display).join(m.token);
     }
     return result;
   }
@@ -172,7 +170,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const vState = voiceState.value;
   const vError = voiceError.value;
 
-  // Build flat list of all incomplete todos across loaded days
+  // Build the mention list: incomplete todos across loaded days, plus artifacts.
   function getMentionOptions(): MentionOption[] {
     const query = mentionQuery.toLowerCase();
     const options: MentionOption[] = [];
@@ -180,8 +178,24 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       for (const todo of day.todos) {
         if (todo.completed) continue;
         if (!query || todo.title.toLowerCase().includes(query)) {
-          options.push({ todo, date: day.date });
+          options.push({ kind: "todo", key: `todo:${todo.id}`, label: todo.title, sub: day.date, todo, date: day.date });
         }
+      }
+    }
+    for (const artifact of allArtifacts.value) {
+      const haystack = artifact.relative_path.toLowerCase();
+      if (!query || haystack.includes(query)) {
+        options.push({ kind: "artifact", key: `artifact:${artifact.relative_path}`, label: artifact.name, sub: artifact.relative_path, artifact });
+      }
+    }
+    for (const list of allLists.value) {
+      if (!query || list.name.toLowerCase().includes(query)) {
+        options.push({ kind: "list", key: `list:${list.id}`, label: list.name, sub: "list", list });
+      }
+    }
+    for (const book of allBooks.value) {
+      if (!query || book.name.toLowerCase().includes(query)) {
+        options.push({ kind: "book", key: `book:${book.id}`, label: book.name, sub: "book", book });
       }
     }
     return options;
@@ -198,11 +212,16 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
     const before = text.slice(0, atPos);
     const after = text.slice(cursorPos);
-    const display = `@${opt.todo.title}`;
+    const display = `@${opt.label}`;
+    const token =
+      opt.kind === "todo" ? `@[${opt.todo.title}](id:${opt.todo.id}|date:${opt.date})`
+      : opt.kind === "artifact" ? `@[${opt.artifact.name}](artifact:${opt.artifact.relative_path})`
+      : opt.kind === "list" ? `@[${opt.list.name}](list:${opt.list.id})`
+      : `@[${opt.book.name}](book:${opt.book.id})`;
     const newText = before + display + " " + after;
 
     setText(newText);
-    setMentions((prev) => [...prev, { display, title: opt.todo.title, id: opt.todo.id, date: opt.date }]);
+    setMentions((prev) => [...prev, { display, token }]);
     setShowMentions(false);
     setMentionQuery("");
 
@@ -333,15 +352,21 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           <div class="mention-menu" ref={menuRef}>
             {options.map((opt, i) => (
               <div
-                key={opt.todo.id}
+                key={opt.key}
                 class={`mention-item${i === mentionIndex ? " selected" : ""}`}
                 onMouseDown={(e) => {
                   e.preventDefault();
                   insertMention(opt);
                 }}
               >
-                <span class="mention-title">{opt.todo.title}</span>
-                <span class="mention-date">{opt.date}</span>
+                <span class={`mention-kind mention-kind-${opt.kind}`}>
+                  {opt.kind === "todo" ? "todo"
+                    : opt.kind === "list" ? "list"
+                    : opt.kind === "book" ? "book"
+                    : opt.artifact.is_dir ? "folder" : "file"}
+                </span>
+                <span class="mention-title">{opt.label}</span>
+                <span class="mention-date">{opt.sub}</span>
               </div>
             ))}
           </div>
@@ -360,7 +385,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          placeholder={image ? "Add a prompt for the image..." : "Message the agent... (@ to mention a todo)"}
+          placeholder={image ? "Add a prompt for the image..." : "Message the agent... (@ to mention a todo or artifact)"}
           disabled={disabled || describing}
           rows={1}
         />

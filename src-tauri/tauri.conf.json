@@ -1,18 +1,18 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "txture",
+  "productName": "paperagent",
   "version": "0.1.0",
-  "identifier": "com.heyo.txture",
+  "identifier": "com.heyo.paperagent",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build && rm -rf src-tauri/agent-bundle && mkdir -p src-tauri/agent-bundle && cp -r agent/dist agent/package.json src-tauri/agent-bundle/",
+    "beforeBuildCommand": "bun run build && rm -rf src-tauri/agent-bundle && mkdir -p src-tauri/agent-bundle && cp -r agent/dist agent/package.json agent/Dockerfile.firecracker src-tauri/agent-bundle/",
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "txture",
+        "title": "paperagent",
         "width": 420,
         "height": 1152,
         "minWidth": 340,

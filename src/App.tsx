@@ -1,16 +1,19 @@
 import { ThemeProvider, themeList, setTheme } from "./theme/ThemeProvider";
 import { useTheme } from "./theme/ThemeProvider";
 import { useRef, useCallback, useEffect } from "preact/hooks";
-import { activeTab, agentStatus, agentMode, settingsOpen, agentName, statusPopoverOpen, days } from "./state/store";
+import { activeTab, agentStatus, agentMode, settingsOpen, agentName, statusPopoverOpen, days, allArtifacts, allLists, allBooks } from "./state/store";
 import { WeekAccordion } from "./components/days/DayAccordion";
 import { MonthAccordion } from "./components/days/MonthAccordion";
 import { DayPanel } from "./components/days/DayPanel";
+import { BacklogPanel } from "./components/backlog/BacklogPanel";
+import { ListsPanel } from "./components/lists/ListsPanel";
+import { BooksPanel } from "./components/books/BooksPanel";
 import { ArtifactsPanel } from "./components/artifacts/ArtifactsPanel";
 import { ChatWindow } from "./components/chat/ChatWindow";
 import { SettingsPanel } from "./components/settings/SettingsPanel";
 import { StatusPopover } from "./components/status/StatusPopover";
 import { setupEventListeners } from "./api/events";
-import { getAgentStatus, getAgentConfig, setAgentConfig, getDaysRange } from "./api/commands";
+import { getAgentStatus, getAgentConfig, setAgentConfig, getDaysRange, listAllArtifacts, listLists, listBooks } from "./api/commands";
 import type { ViewTab, AgentStatus } from "./types";
 import { signal } from "@preact/signals";
 
@@ -18,6 +21,9 @@ const tabs: { id: ViewTab; label: string }[] = [
   { id: "day", label: "Day" },
   { id: "week", label: "Week" },
   { id: "month", label: "Month" },
+  { id: "backlog", label: "Backlog" },
+  { id: "lists", label: "Lists" },
+  { id: "books", label: "Books" },
   { id: "artifacts", label: "Artifacts" },
 ];
 
@@ -39,6 +45,13 @@ function AppShell() {
     getAgentStatus().then((s) => {
       agentStatus.value = s as AgentStatus;
     }).catch(() => {});
+    // Populate the shared signals at boot so @-mentions have data even on
+    // the default Day tab (DayPanel keeps its own local state and doesn't fill it,
+    // and artifacts only load when the Artifacts tab is opened).
+    getDaysRange().then((d) => { days.value = d; }).catch(() => {});
+    listAllArtifacts().then((a) => { allArtifacts.value = a; }).catch(() => {});
+    listLists().then((l) => { allLists.value = l; }).catch(() => {});
+    listBooks().then((b) => { allBooks.value = b; }).catch(() => {});
 
     // Re-fetch data on window focus when in deployed/remote mode (multi-device sync)
     const handleVisibility = () => {
@@ -48,6 +61,21 @@ function AppShell() {
     };
     document.addEventListener("visibilitychange", handleVisibility);
 
+    // Keep a manually-dragged content height bounded when the window resizes.
+    // Without this, the fixed px height (flex: none) goes stale and the chat
+    // panel below it gets squished/clipped by .app-column's overflow: hidden.
+    const handleResize = () => {
+      if (contentHeight.value === null || !containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const headerOffset = 72;
+      const minContent = 80;
+      const minChat = 150;
+      const available = rect.height - headerOffset;
+      const clamped = Math.max(minContent, Math.min(contentHeight.value, available - minChat));
+      if (clamped !== contentHeight.value) contentHeight.value = clamped;
+    };
+    window.addEventListener("resize", handleResize);
+
     // Prevent the webview from navigating when files are dropped outside the chat input
     const swallow = (e: DragEvent) => { e.preventDefault(); };
     document.addEventListener("dragover", swallow);
@@ -55,6 +83,7 @@ function AppShell() {
 
     return () => {
       document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("resize", handleResize);
       document.removeEventListener("dragover", swallow);
       document.removeEventListener("drop", swallow);
     };
@@ -157,6 +186,9 @@ function AppShell() {
         {activeTab.value === "day" && <DayPanel />}
         {activeTab.value === "week" && <WeekAccordion />}
         {activeTab.value === "month" && <MonthAccordion />}
+        {activeTab.value === "backlog" && <BacklogPanel />}
+        {activeTab.value === "lists" && <ListsPanel />}
+        {activeTab.value === "books" && <BooksPanel />}
         {activeTab.value === "artifacts" && <ArtifactsPanel />}
       </div>
 

@@ -11,7 +11,7 @@ fn vm_name_from_config(state: &AppState) -> String {
             }
         }
     }
-    "txture-agent".to_string()
+    "todo-agent".to_string()
 }
 
 fn vm_backend_from_config(state: &AppState) -> String {
@@ -88,4 +88,9 @@ pub fn vm_status(state: State<AppState>) -> String {
     } else {
         "stopped".to_string()
     }
+}
+
+#[tauri::command]
+pub fn list_sandboxes() -> Result<Vec<String>, String> {
+    svc::list_sandbox_names()
 }

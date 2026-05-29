@@ -93,16 +93,18 @@ export function MonthAccordion() {
                 const count = entry?.todos?.length ?? 0;
                 const isToday = dateStr === today;
                 const dayNum = new Date(dateStr + "T00:00:00").getDate();
+                const bucket = count <= 0 ? 0 : count <= 2 ? 1 : count <= 4 ? 2 : count <= 6 ? 3 : 4;
+                const heatClass = inRange && bucket > 0 ? ` heat-${bucket}` : "";
 
                 return (
                   <button
                     key={dateStr}
-                    class={`cal-cell${inRange ? "" : " cal-out"}${isToday ? " cal-today" : ""}`}
+                    class={`cal-cell${inRange ? "" : " cal-out"}${isToday ? " cal-today" : ""}${heatClass}`}
                     onClick={() => { if (inRange) openDay(dateStr); }}
                     disabled={!inRange}
+                    title={count > 0 ? `${count} ${count === 1 ? "task" : "tasks"}` : undefined}
                   >
                     <span class="cal-day-num">{dayNum}</span>
-                    {count > 0 && <span class="cal-dot" />}
                   </button>
                 );
               })}

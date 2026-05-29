@@ -7,6 +7,9 @@ allowed-tools: Bash, Read, Grep
 
 # heyvm login — Heyo Platform Authentication
 
+> **See also:** load the **heyvm-docs** skill for an overview of the heyvm
+> platform and an index of the other heyvm-* skills.
+
 You are helping the user log in to the Heyo platform so they can use cloud features (deploying sandboxes, archiving, listing deployed sandboxes, etc.).
 
 ## Binary Location

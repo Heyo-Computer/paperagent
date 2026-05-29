@@ -1,5 +1,5 @@
 use tauri::State;
-use crate::models::todo::{DayEntry, TodoItem};
+use crate::models::todo::{Backlog, DayEntry, TodoItem};
 use crate::services::storage as svc;
 use crate::services::agent as agent_svc;
 use crate::state::AppState;
@@ -114,4 +114,74 @@ pub async fn save_spec(date: String, todo_id: String, content: String, state: St
         return Ok(());
     }
     svc::save_spec(&state.storage_root, &date, &todo_id, &content)
+}
+
+// ── Backlog (undated) ──
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct MoveBacklogResult {
+    pub backlog: Backlog,
+    pub day: DayEntry,
+}
+
+#[tauri::command]
+pub async fn load_backlog(state: State<'_, AppState>) -> Result<Backlog, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/load_backlog", serde_json::json!({})).await;
+    }
+    Ok(svc::load_backlog(&state.storage_root))
+}
+
+#[tauri::command]
+pub async fn add_backlog_item(title: String, state: State<'_, AppState>) -> Result<Backlog, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/add_backlog_item", serde_json::json!({ "title": title })).await;
+    }
+    svc::add_backlog_item(&state.storage_root, &title)
+}
+
+#[tauri::command]
+pub async fn update_backlog_item(item: TodoItem, state: State<'_, AppState>) -> Result<Backlog, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/update_backlog_item", serde_json::json!({ "item": item })).await;
+    }
+    svc::update_backlog_item(&state.storage_root, item)
+}
+
+#[tauri::command]
+pub async fn delete_backlog_item(item_id: String, state: State<'_, AppState>) -> Result<Backlog, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/delete_backlog_item", serde_json::json!({ "item_id": item_id })).await;
+    }
+    svc::delete_backlog_item(&state.storage_root, &item_id)
+}
+
+#[tauri::command]
+pub async fn load_backlog_spec(item_id: String, state: State<'_, AppState>) -> Result<String, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/load_backlog_spec", serde_json::json!({ "item_id": item_id })).await;
+    }
+    Ok(svc::load_backlog_spec(&state.storage_root, &item_id))
+}
+
+#[tauri::command]
+pub async fn save_backlog_spec(item_id: String, content: String, state: State<'_, AppState>) -> Result<(), String> {
+    if let Some(url) = agent_url(&state) {
+        let _: serde_json::Value = agent_rpc(&url, "storage/save_backlog_spec", serde_json::json!({
+            "item_id": item_id,
+            "content": content,
+        })).await?;
+        return Ok(());
+    }
+    svc::save_backlog_spec(&state.storage_root, &item_id, &content)
+}
+
+#[tauri::command]
+pub async fn move_backlog_to_day(item_id: String, date: String, state: State<'_, AppState>) -> Result<MoveBacklogResult, String> {
+    logging::info(&format!("move_backlog_to_day: item={}, date={}", item_id, date));
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/move_backlog_to_day", serde_json::json!({ "item_id": item_id, "date": date })).await;
+    }
+    let (backlog, day) = svc::move_backlog_to_day(&state.storage_root, &item_id, &date)?;
+    Ok(MoveBacklogResult { backlog, day })
 }

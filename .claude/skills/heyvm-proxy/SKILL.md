@@ -7,6 +7,10 @@ allowed-tools: Bash, Read, Grep
 
 # heyvm Proxy & Connect — P2P Networking for Sandboxes
 
+> **See also:** load the **heyvm-docs** skill for an overview of the heyvm
+> platform and an index of the other heyvm-* skills (sandbox, deploy, api,
+> firecracker, login, system).
+
 You are helping the user expose local services, connect to remote sandboxes, share sandbox shells, and mount remote workspaces using the heyvm P2P networking features (powered by iroh).
 
 ## Binary Location
@@ -194,7 +198,10 @@ Proxies a **local** sandbox port to a public hostname. Requires the `API_HOSTNAM
 API_HOSTNAME=heyo.computer heyvm bind my-sandbox 8080
 ```
 
-**Important:** `heyvm bind` only works for **local** sandboxes. For deployed (cloud) sandboxes, use the cloud API — see the `/deploy` skill.
+**Important:** `heyvm bind` only works for **local** sandboxes. For
+deployed (cloud) sandboxes, expose ports at deploy time with `heyvm
+create --cloud --port <p>` (or `--deploy-from --port <p>` on Linux).
+See the **heyvm-deploy** skill.
 
 ---
 
