@@ -1,4 +1,4 @@
-# txture
+# Planner
 
 A desktop task manager with an AI agent that runs in a sandboxed VM. Built with Tauri v2, Preact, and Rust.
 
