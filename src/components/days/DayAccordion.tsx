@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "preact/hooks";
 import { days, expandedDate, getDateRange, formatDate, dayByDate, expandedTodoId, todayString, isAgentLoading } from "../../state/store";
-import { getDaysRange, saveTodo, updateTodo as updateTodoCmd, deleteTodo as deleteTodoCmd } from "../../api/commands";
+import { getDaysRangeOffset, saveTodo, updateTodo as updateTodoCmd, deleteTodo as deleteTodoCmd } from "../../api/commands";
 import { sendChatMessage, buildSummaryPrompt } from "../../api/chat";
 import { TodoItem } from "../todos/TodoItem";
 import { AddTodo } from "../todos/AddTodo";
@@ -10,24 +10,52 @@ import { signal, useSignal } from "@preact/signals";
 // Track whether all sections are collapsed (for the toggle button)
 const allCollapsed = signal(false);
 
+// Week navigation offset, in weeks (0 = current rolling window). Persists across
+// tab switches like the Day view's viewedDate.
+const weekOffset = signal(0);
+
+function rangeLabel(dates: string[]): string {
+  if (dates.length === 0) return "";
+  const first = new Date(dates[0] + "T00:00:00");
+  const last = new Date(dates[dates.length - 1] + "T00:00:00");
+  const fmt = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${fmt(first)} – ${fmt(last)}`;
+}
+
+function weekRelativeLabel(o: number): string {
+  if (o === 0) return "This week";
+  if (o === -1) return "Last week";
+  if (o === 1) return "Next week";
+  return `${Math.abs(o)} weeks ${o < 0 ? "ago" : "ahead"}`;
+}
+
 export function WeekAccordion() {
   const todayRef = useRef<HTMLDivElement>(null);
   const loaded = useSignal(false);
 
+  // Load the day range for the currently-offset week into the shared `days`
+  // signal. Offsets are in days relative to today, matching the default window.
+  async function loadRange() {
+    const o = weekOffset.value;
+    const entries = await getDaysRangeOffset(-6 + 7 * o, 1 + 7 * o);
+    days.value = entries;
+  }
+
   useEffect(() => {
-    getDaysRange().then((entries) => {
-      days.value = entries;
-    }).catch(() => {
-      days.value = getDateRange().map((date) => ({ date, todos: [] }));
+    loaded.value = false;
+    loadRange().catch(() => {
+      days.value = getDateRange(7 * weekOffset.value).map((date) => ({ date, todos: [] }));
     }).finally(() => {
       loaded.value = true;
-      requestAnimationFrame(() => {
-        todayRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
-      });
+      if (weekOffset.value === 0) {
+        requestAnimationFrame(() => {
+          todayRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+        });
+      }
     });
-  }, []);
+  }, [weekOffset.value]);
 
-  const dateRange = getDateRange();
+  const dateRange = getDateRange(7 * weekOffset.value);
   const today = todayString();
 
   function toggleDay(date: string) {
@@ -50,18 +78,13 @@ export function WeekAccordion() {
   }
 
   async function reload() {
-    const entries = await getDaysRange();
-    days.value = entries;
+    await loadRange();
   }
 
   async function handleAdd(date: string, title: string) {
-    console.log("[WeekAccordion] handleAdd called", { date, title });
     try {
-      const result = await saveTodo(date, title);
-      console.log("[WeekAccordion] saveTodo returned", { date, todosCount: result.todos.length, result });
-      const entries = await getDaysRange();
-      console.log("[WeekAccordion] reload returned", entries.map(e => ({ date: e.date, count: e.todos.length })));
-      days.value = entries;
+      await saveTodo(date, title);
+      await loadRange();
     } catch (e) {
       console.error("[WeekAccordion] handleAdd FAILED", e);
     }
@@ -86,14 +109,22 @@ export function WeekAccordion() {
     await sendChatMessage(buildSummaryPrompt(date, formatDate(date), todos));
   }
 
-  if (!loaded.value) {
-    return <div class="accordion" />;
-  }
-
   const hasExpanded = expandedDate.value !== "";
 
   return (
     <div class="accordion">
+      <div class="day-panel-header">
+        <button class="day-nav-btn" onClick={() => weekOffset.value--} title="Previous week">&#x2039;</button>
+        <div class="day-panel-title">
+          <div class="day-panel-weekday">{weekRelativeLabel(weekOffset.value)}</div>
+          <div class="day-panel-date">{rangeLabel(dateRange)}</div>
+        </div>
+        <button class="day-nav-btn" onClick={() => weekOffset.value++} title="Next week">&#x203A;</button>
+        {weekOffset.value !== 0 && (
+          <button class="btn btn-sm btn-ghost day-today-btn" onClick={() => (weekOffset.value = 0)}>This week</button>
+        )}
+      </div>
+
       <div class="accordion-toolbar">
         <button
           class="accordion-collapse-btn"
@@ -114,7 +145,7 @@ export function WeekAccordion() {
         </button>
       </div>
 
-      {dateRange.map((date) => {
+      {!loaded.value ? null : dateRange.map((date) => {
         const entry = dayByDate(date);
         const info = formatDate(date);
         const isOpen = expandedDate.value === date;

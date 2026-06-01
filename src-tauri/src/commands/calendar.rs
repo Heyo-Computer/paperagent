@@ -4,6 +4,13 @@ use crate::services::storage;
 use crate::state::AppState;
 use crate::logging;
 
+/// How many days of past events to pull into the searchable cache. The window
+/// slides forward each sync, and `storage::save_calendar_events` merges rather than
+/// overwrites, so the cache keeps accumulating history beyond this bound over time.
+const PAST_LOOKBACK_DAYS: i64 = 90;
+/// How many days ahead to fetch (and sync onto the todo list).
+const FUTURE_DAYS: i64 = 30;
+
 #[tauri::command]
 pub fn get_calendar_config(state: State<AppState>) -> cal::CalendarConfig {
     cal::CalendarConfig::load(&state.config_dir)
@@ -94,14 +101,22 @@ pub async fn sync_calendar_to_todos(
         }
     };
 
-    let events = cal::fetch_events_range(&tokens.access_token, &config.calendar_id, 0, 30).await?;
+    let events = cal::fetch_events_range(
+        &tokens.access_token,
+        &config.calendar_id,
+        -PAST_LOOKBACK_DAYS,
+        FUTURE_DAYS,
+    )
+    .await?;
 
-    // Cache events for the agent tool
+    // Cache the full window (past + upcoming) so the agent's search can index past meetings.
     if let Err(e) = storage::save_calendar_events(&state.data_dir, &events) {
         logging::warn(&format!("calendar sync: failed to cache events: {}", e));
     }
 
-    let added = sync_events_to_storage(&state.storage_root, &events);
+    // Only add upcoming events to the todo list — don't backfill past meetings as todos.
+    let upcoming = upcoming_events(&events);
+    let added = sync_events_to_storage(&state.storage_root, &upcoming);
 
     let msg = format!("Synced {} events, added {} new todos.", events.len(), added);
     logging::info(&format!("calendar: {}", msg));
@@ -157,6 +172,18 @@ fn sync_events_to_storage(storage_root: &std::path::Path, events: &[cal::Calenda
     }
 
     added_total
+}
+
+/// Filter a fetched window down to today-or-later events. Used to keep the past
+/// portion of the cache out of the todo list (we cache the past for search, but
+/// don't want to materialize old meetings as todos).
+fn upcoming_events(events: &[cal::CalendarEvent]) -> Vec<cal::CalendarEvent> {
+    let today = chrono::Local::now().date_naive().to_string();
+    events
+        .iter()
+        .filter(|e| event_date(e).map_or(false, |d| d >= today))
+        .cloned()
+        .collect()
 }
 
 /// Extract YYYY-MM-DD from a calendar event's start_time. Returns None if start_time is empty
@@ -234,14 +261,23 @@ pub async fn auto_sync_calendar(app: AppHandle) {
         }
     };
 
-    match cal::fetch_events_range(&access_token, &config.calendar_id, 0, 30).await {
+    match cal::fetch_events_range(
+        &access_token,
+        &config.calendar_id,
+        -PAST_LOOKBACK_DAYS,
+        FUTURE_DAYS,
+    )
+    .await
+    {
         Ok(events) => {
-            // Cache events for the agent tool
+            // Cache the full window (past + upcoming) so search can index past meetings.
             if let Err(e) = storage::save_calendar_events(&state.data_dir, &events) {
                 logging::warn(&format!("calendar auto-sync: failed to cache events: {}", e));
             }
 
-            let added = sync_events_to_storage(&state.storage_root, &events);
+            // Only add upcoming events as todos — don't backfill past meetings.
+            let upcoming = upcoming_events(&events);
+            let added = sync_events_to_storage(&state.storage_root, &upcoming);
             if added > 0 {
                 logging::info(&format!("calendar auto-sync: added {} events as todos", added));
                 let _ = app.emit("calendar-synced", added);

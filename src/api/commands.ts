@@ -307,6 +307,11 @@ export async function getMonthRange(): Promise<DayEntry[]> {
   return invoke("get_month_range");
 }
 
+// Arbitrary day range (offsets in days relative to today) — backs Week/Month nav.
+export async function getDaysRangeOffset(offsetStart: number, offsetEnd: number): Promise<DayEntry[]> {
+  return invoke("get_days_range_offset", { offsetStart, offsetEnd });
+}
+
 // Speech commands
 export async function transcribeAudio(audioData: string, mediaType: string): Promise<string> {
   return invoke("transcribe_audio", { audioData, mediaType });

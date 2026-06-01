@@ -48,6 +48,7 @@ export interface ListItem {
   id: string;
   values: Record<string, unknown>;
   linked_todos: TodoRef[];
+  archived: boolean;
   created_at: string;
   updated_at: string;
 }

@@ -1,5 +1,11 @@
 import type { ComponentChildren } from "preact";
-import { activeTab, pendingListSelection, pendingBookSelection } from "../../state/store";
+import {
+  activeTab,
+  pendingListSelection,
+  pendingBookSelection,
+  navigateToTodo,
+  navigateToArtifact,
+} from "../../state/store";
 
 // Matches the agent-readable mention tokens:
 //   todo:     @[Title](id:<id>|date:<date>)
@@ -9,11 +15,13 @@ import { activeTab, pendingListSelection, pendingBookSelection } from "../../sta
 // Group 1 = label, 2 = todo id, 3 = todo date, 4 = artifact relative path,
 // 5 = list id, 6 = list item id (optional), 7 = book id, 8 = book page id (optional).
 // Exactly one kind is present per match.
+// Note: the todo date group is `[^)]*` (zero-or-more) so backlog tokens, which
+// have an empty date — @[t](id:<id>|date:) — still match and render as chips.
 export const MENTION_RE =
-  /@\[([^\]]+)\]\((?:id:([^|)]+)\|date:([^)]+)|artifact:([^)]+)|list:([^/)]+)(?:\/([^)]+))?|book:([^/)]+)(?:\/([^)]+))?)\)/g;
+  /@\[([^\]]+)\]\((?:id:([^|)]+)\|date:([^)]*)|artifact:([^)]+)|list:([^/)]+)(?:\/([^)]+))?|book:([^/)]+)(?:\/([^)]+))?)\)/g;
 
-// Navigate to the list/book target of a clicked mention chip. Returns true if it
-// handled a list/book chip (todo/artifact chips are inert). `el` is the click target.
+// Navigate to the target of a clicked mention chip — list/book/todo/artifact.
+// Returns true if it handled a chip. `el` is the click target.
 export function navigateFromMention(el: EventTarget | null): boolean {
   if (!(el instanceof Element)) return false;
   const chip = el.closest<HTMLElement>(".mention");
@@ -28,6 +36,17 @@ export function navigateFromMention(el: EventTarget | null): boolean {
   if (bookId) {
     pendingBookSelection.value = { bookId, pageId: chip.getAttribute("data-page-id") || undefined };
     activeTab.value = "books";
+    return true;
+  }
+  const todoId = chip.getAttribute("data-todo-id");
+  if (todoId) {
+    // Empty date -> backlog tab (navigateToTodo handles the branch).
+    navigateToTodo({ todo_id: todoId, date: chip.getAttribute("data-todo-date") || "" });
+    return true;
+  }
+  const artifactPath = chip.getAttribute("data-artifact-path");
+  if (artifactPath) {
+    navigateToArtifact(artifactPath);
     return true;
   }
   return false;

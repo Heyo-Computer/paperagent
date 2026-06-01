@@ -58,6 +58,16 @@ pub async fn get_month_range(state: State<'_, AppState>) -> Result<Vec<DayEntry>
     Ok(svc::load_days_range(&state.storage_root, 2, 28))
 }
 
+/// Load an arbitrary day range, given as day offsets relative to today.
+/// Backs the Week/Month view navigation (prev/next).
+#[tauri::command]
+pub async fn get_days_range_offset(offset_start: i64, offset_end: i64, state: State<'_, AppState>) -> Result<Vec<DayEntry>, String> {
+    if let Some(url) = agent_url(&state) {
+        return agent_rpc(&url, "storage/load_days_range", serde_json::json!({"offset_start": offset_start, "offset_end": offset_end})).await;
+    }
+    Ok(svc::load_days_range(&state.storage_root, offset_start, offset_end))
+}
+
 #[tauri::command]
 pub async fn save_todo(date: String, title: String, state: State<'_, AppState>) -> Result<DayEntry, String> {
     logging::info(&format!("save_todo: date={}, title={}", date, title));

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "preact/hooks";
 import { days, allArtifacts, allLists, allBooks } from "../../state/store";
 import { useVoiceInput, voiceState, voiceError } from "../../hooks/useVoiceInput";
 import { describeImage } from "../../api/commands";
+import { SKILLS, type Skill } from "../../skills";
 import type { TodoItem, Artifact, ListSummary, BookSummary } from "../../types";
 
 interface ChatInputProps {
@@ -46,6 +47,9 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [mentionQuery, setMentionQuery] = useState("");
   const [mentionIndex, setMentionIndex] = useState(0);
   const [mentions, setMentions] = useState<ActiveMention[]>([]);
+  const [showSkills, setShowSkills] = useState(false);
+  const [skillQuery, setSkillQuery] = useState("");
+  const [skillIndex, setSkillIndex] = useState(0);
   const [image, setImage] = useState<StagedImage | null>(null);
   const [imageError, setImageError] = useState<string>("");
   const [describing, setDescribing] = useState(false);
@@ -53,6 +57,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [actionMenuOpen, setActionMenuOpen] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const skillMenuRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const actionMenuRef = useRef<HTMLDivElement>(null);
 
@@ -155,6 +160,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     setImage(null);
     setImageError("");
     setShowMentions(false);
+    setShowSkills(false);
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
     }
@@ -203,6 +209,25 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
 
   const options = showMentions ? getMentionOptions() : [];
 
+  const skillOptions: Skill[] = showSkills
+    ? SKILLS.filter((s) => s.name.startsWith(skillQuery.toLowerCase()))
+    : [];
+
+  // Autocomplete the textarea to a literal "/name " prefix. Unlike mentions this
+  // is NOT expanded into a hidden token — the agent reads the slash convention.
+  function selectSkill(skill: Skill) {
+    const newText = `/${skill.name} `;
+    setText(newText);
+    setShowSkills(false);
+    setSkillQuery("");
+    requestAnimationFrame(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        inputRef.current.setSelectionRange(newText.length, newText.length);
+      }
+    });
+  }
+
   function insertMention(opt: MentionOption) {
     // Find the @ trigger position
     const cursorPos = inputRef.current?.selectionStart ?? text.length;
@@ -240,6 +265,29 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   }
 
   function handleKeyDown(e: KeyboardEvent) {
+    if (showSkills && skillOptions.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.min(i + 1, skillOptions.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        selectSkill(skillOptions[skillIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setShowSkills(false);
+        return;
+      }
+    }
+
     if (showMentions && options.length > 0) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -279,11 +327,23 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     // Drop any mentions whose display text is no longer in the textarea
     setMentions((prev) => prev.filter((m) => value.includes(m.display)));
 
-    // Check for @ trigger
     const cursorPos = target.selectionStart ?? value.length;
     const beforeCursor = value.slice(0, cursorPos);
-    const atMatch = beforeCursor.match(/@([^\s@]*)$/);
 
+    // Slash skill trigger: only at the very start of the message, while the caret
+    // is still in the first token (no space yet). Mutually exclusive with @.
+    const slashMatch = beforeCursor.match(/^\/(\S*)$/);
+    if (slashMatch) {
+      setSkillQuery(slashMatch[1]);
+      setShowSkills(true);
+      setSkillIndex(0);
+      setShowMentions(false);
+      return;
+    }
+    setShowSkills(false);
+
+    // Check for @ trigger
+    const atMatch = beforeCursor.match(/@([^\s@]*)$/);
     if (atMatch) {
       setMentionQuery(atMatch[1]);
       setShowMentions(true);
@@ -300,6 +360,13 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       item?.scrollIntoView({ block: "nearest" });
     }
   }, [mentionIndex, showMentions]);
+
+  useEffect(() => {
+    if (showSkills && skillMenuRef.current) {
+      const item = skillMenuRef.current.children[skillIndex] as HTMLElement;
+      item?.scrollIntoView({ block: "nearest" });
+    }
+  }, [skillIndex, showSkills]);
 
   // Close action menu when clicking outside
   useEffect(() => {
@@ -348,6 +415,24 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {showSkills && skillOptions.length > 0 && (
+          <div class="mention-menu" ref={skillMenuRef}>
+            {skillOptions.map((skill, i) => (
+              <div
+                key={skill.name}
+                class={`mention-item${i === skillIndex ? " selected" : ""}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  selectSkill(skill);
+                }}
+              >
+                <span class="mention-kind mention-kind-skill">skill</span>
+                <span class="mention-title">/{skill.name}</span>
+                <span class="mention-date">{skill.hint}</span>
+              </div>
+            ))}
+          </div>
+        )}
         {showMentions && options.length > 0 && (
           <div class="mention-menu" ref={menuRef}>
             {options.map((opt, i) => (

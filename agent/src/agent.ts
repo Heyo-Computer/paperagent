@@ -6,6 +6,7 @@ import { saveTodoSpec, updateTodo, getTodosForDate, getBacklogText, addBacklogIt
 import { saveArtifact, listArtifacts } from "./tools/artifact.js";
 import { getCalendarEvents, getCalendarEventById } from "./tools/calendar.js";
 import { linkTodoToListItem, unlinkTodoFromListItem, linkTodoToBookPage, unlinkTodoFromBookPage, createPageFromTodo, createListItemFromTodo } from "./tools/links.js";
+import { searchIndex, type DocKind, type IndexDoc } from "./tools/search.js";
 import {
   listLists,
   getList,
@@ -62,6 +63,21 @@ function verbosityInstruction(verbosity: PromptConfig["spec_verbosity"]): string
     default:
       return "When writing specs, use a balanced level of detail — clear and complete without being exhaustive.";
   }
+}
+
+/** Render index results into a compact, model-readable block for the /search summary.
+ * Each line leads with the result's `token` so the model can echo it verbatim as a chip. */
+function renderResultsForModel(results: IndexDoc[], query: string): string {
+  if (results.length === 0) {
+    return `Search query: "${query}"\n\nResults: (none found)`;
+  }
+  const lines = results.map((r, i) => {
+    const bits = [`${i + 1}. [${r.kind}] ${r.token}`];
+    if (r.date) bits.push(`   date: ${r.date}`);
+    if (r.snippet) bits.push(`   ${r.snippet}`);
+    return bits.join("\n");
+  });
+  return `Search query: "${query}"\n\nResults (${results.length}):\n${lines.join("\n")}`;
 }
 
 const tools: ToolSchema[] = [
@@ -498,6 +514,34 @@ const tools: ToolSchema[] = [
       required: ["book_id", "page_id"],
     },
   },
+  {
+    name: "search_content",
+    description:
+      "Search across everything the user has: todos, specs, backlog, lists+items, books+pages, " +
+      "artifacts, and calendar events (including PAST meetings). Use this whenever the user references " +
+      "something vaguely or asks where/find/which/when (e.g. \"where did I note the launch date\", " +
+      "\"find my Acme list\", \"when did I last meet Hugo\"). This is the only way to find a calendar " +
+      "event by keyword or in the past — calendar_events only lists a forward date window. Returns " +
+      "ranked matches; each result has kind, title, snippet, ids, and a `token` (an @[..] mention " +
+      "string). When you surface a result to the user, echo its `token` verbatim so it renders as a " +
+      "clickable chip (calendar tokens render as plain text — there is no calendar chip).",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Search terms." },
+        kinds: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["todo", "backlog", "spec", "list", "list_item", "book", "page", "artifact", "calendar"],
+          },
+          description: "Optional filter — only return results of these kinds.",
+        },
+        limit: { type: "number", description: "Max results (default 10)." },
+      },
+      required: ["query"],
+    },
+  },
 ];
 
 function pickProvider(): ChatProvider {
@@ -520,6 +564,15 @@ export class Agent {
   }
 
   async chat(userMessage: string): Promise<AgentMessage> {
+    // Deterministic /search skill: retrieval runs in code (always hits the index),
+    // and the model only summarizes the actual results — so it can never hedge about
+    // a "limitation" or silently skip the search.
+    const searchMatch = /^\s*\/search\s+([\s\S]+)/i.exec(userMessage);
+    if (searchMatch) {
+      const query = searchMatch[1].trim();
+      if (query) return this.searchAndSummarize(query);
+    }
+
     this.history.push(wrapUser(this.provider, userMessage));
 
     const today = new Date().toISOString().slice(0, 10);
@@ -564,9 +617,18 @@ export class Agent {
       "To create a brand-new page or item FROM a todo (e.g. \"log my standup notes as a page in my standup book\"), " +
       "look up the todo with get_todos then call create_page_from_todo / create_list_item_from_todo — these create " +
       "the page/item seeded from the todo and link both sides in one step.\n" +
-      "When the user references a meeting or calendar event, use calendar_events to list upcoming events " +
-      "and calendar_event to fetch full details (attendees, description, meeting link). " +
+      "When the user references a meeting or calendar event, use calendar_events to list events in a " +
+      "date window and calendar_event to fetch full details (attendees, description, meeting link). " +
+      "calendar_events only lists a window of cached events — to find a PAST meeting or look one up by " +
+      "keyword/attendee (e.g. \"when did I last meet Hugo\"), use search_content, which indexes all " +
+      "cached calendar events including past ones. " +
       "To create a spec for an event, look up the matching todo with get_todos, then call save_spec.\n" +
+      "When the user references something vaguely or asks where/find/which/when something is across their " +
+      "todos, lists, books, artifacts, or calendar events, use the search_content tool. You MUST echo each result's " +
+      "`token` (the @[..] string) verbatim when presenting it, so it renders as a clickable chip. " +
+      "Never tell the user you are unable to search a category of their data (e.g. past calendar events) — " +
+      "search_content indexes all of it; call it and answer from the results. If it returns nothing, say " +
+      "nothing was found rather than claiming you lack access.\n" +
       "Be concise and action-oriented. Prefer using tools over asking the user for information you can look up.\n\n" +
       verbosityInstruction(promptConfig.spec_verbosity);
 
@@ -601,6 +663,38 @@ export class Agent {
       id: randomUUID(),
       role: "assistant",
       content: accumulatedText,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  /** Deterministic search skill (/search): query the index in code, then make a
+   * single tool-less LLM call to summarize the *actual* results. The model is handed
+   * authoritative results and forbidden from claiming a limitation, so retrieval is
+   * deterministic and never silently skipped or editorialized away. */
+  private async searchAndSummarize(query: string): Promise<AgentMessage> {
+    const results = searchIndex(query, { limit: 10 });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const searchSystem =
+      `You are a helpful assistant for a todo/task management app. Today is ${today}. ` +
+      "You are presenting the results of a deterministic search across the user's data — " +
+      "todos, specs, backlog, lists, books, artifacts, and calendar events (including PAST " +
+      "meetings). The results below were retrieved directly from the index, not by you, and " +
+      "are authoritative and complete. Summarize them for the user in 1-3 sentences and echo " +
+      "each result's `token` verbatim so it renders as a clickable chip. NEVER claim you can't " +
+      "search something (e.g. past calendar events) — if it isn't in the results, it simply " +
+      "wasn't found. If there are no results, say so plainly.";
+
+    // Push the query + retrieved results as the user turn so the summary call has the
+    // results in context and the conversation stays well-formed for follow-ups.
+    this.history.push(wrapUser(this.provider, renderResultsForModel(results, query)));
+    const turn = await this.provider.chat(searchSystem, this.history, []);
+    this.appendAssistant(turn.rawAssistant);
+
+    return {
+      id: randomUUID(),
+      role: "assistant",
+      content: turn.text,
       timestamp: new Date().toISOString(),
     };
   }
@@ -698,6 +792,22 @@ export class Agent {
           if (input.title != null) book = updatePageMeta(input.book_id, input.page_id, input.title);
           if (input.content != null) book = savePageContent(input.book_id, input.page_id, input.content);
           return JSON.stringify(book);
+        }
+        case "search_content": {
+          const raw = (input as Record<string, unknown>).kinds;
+          let kinds: DocKind[] | undefined;
+          if (Array.isArray(raw)) kinds = raw as DocKind[];
+          else if (typeof raw === "string" && raw.trim()) {
+            try {
+              const parsed = JSON.parse(raw);
+              kinds = Array.isArray(parsed) ? (parsed as DocKind[]) : [raw as DocKind];
+            } catch {
+              kinds = raw.split(/[,\s]+/).filter(Boolean) as DocKind[];
+            }
+          }
+          const limitRaw = (input as Record<string, unknown>).limit;
+          const limit = limitRaw != null ? Number(limitRaw) : undefined;
+          return JSON.stringify(searchIndex(input.query, { kinds, limit }));
         }
         default:
           return `Unknown tool: ${name}`;

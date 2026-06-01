@@ -1,5 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
-import { artifacts, allArtifacts } from "../../state/store";
+import { artifacts, allArtifacts, pendingArtifactSelection } from "../../state/store";
 import {
   listArtifacts,
   listAllArtifacts,
@@ -65,6 +65,32 @@ export function ArtifactsPanel() {
   }
 
   useEffect(() => { refresh(cwd); }, [cwd]);
+
+  // Consume a cross-tab artifact navigation request (artifact chip click in chat):
+  // cd into the file's folder and, for a file, open it in the viewer modal.
+  useEffect(() => {
+    const sel = pendingArtifactSelection.value;
+    if (!sel) return;
+    pendingArtifactSelection.value = null;
+    const path = sel.path;
+    const slash = path.lastIndexOf("/");
+    const dir = slash >= 0 ? path.slice(0, slash) : "";
+    setCwd(dir);
+    // Prefer the full entry from the flat list; fall back to a minimal one.
+    const known = allArtifacts.value.find((a) => a.relative_path === path);
+    if (known) {
+      if (!known.is_dir) setViewing(known);
+    } else {
+      setViewing({
+        name: slash >= 0 ? path.slice(slash + 1) : path,
+        path,
+        relative_path: path,
+        size: 0,
+        created_at: "",
+        is_dir: false,
+      });
+    }
+  }, [pendingArtifactSelection.value]);
 
   useEffect(() => {
     setIsEditing(false);

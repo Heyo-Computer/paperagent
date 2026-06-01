@@ -63,6 +63,7 @@ pub fn run() {
             commands::storage::load_day,
             commands::storage::get_days_range,
             commands::storage::get_month_range,
+            commands::storage::get_days_range_offset,
             commands::storage::save_todo,
             commands::storage::update_todo,
             commands::storage::delete_todo,
