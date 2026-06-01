@@ -94,3 +94,34 @@ pub fn vm_status(state: State<AppState>) -> String {
 pub fn list_sandboxes() -> Result<Vec<String>, String> {
     svc::list_sandbox_names()
 }
+
+#[derive(serde::Serialize)]
+pub struct VmInfo {
+    pub name: String,
+    pub status: String,
+    pub backend: String,
+}
+
+/// List all sandboxes (running + stopped) with status — powers the "use existing
+/// VM" picker for the sync-to-another-workstation flow.
+#[tauri::command]
+pub fn list_vms() -> Result<Vec<VmInfo>, String> {
+    let output = svc::list_all_sandboxes()?;
+    let mut vms = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('-') {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split_whitespace().collect();
+        if cols.len() < 3 || cols[0] == "NAME" {
+            continue;
+        }
+        vms.push(VmInfo {
+            name: cols[0].to_string(),
+            status: cols[2].to_string(),
+            backend: cols.get(3).map(|s| s.to_string()).unwrap_or_default(),
+        });
+    }
+    Ok(vms)
+}

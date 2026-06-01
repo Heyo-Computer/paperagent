@@ -33,10 +33,58 @@ fn run(label: &str, cmd: &mut Command) -> Result<String, String> {
     }
 }
 
+/// Path to the SSH key heyvm installs into sandbox images.
+fn ssh_key_path() -> std::path::PathBuf {
+    dirs::home_dir()
+        .map(|h| h.join(".heyo/keys/id_heyvm"))
+        .unwrap_or_else(|| std::path::PathBuf::from(".heyo/keys/id_heyvm"))
+}
+
+/// Common ssh/scp options that route through `heyvm ssh-proxy <vm>` (bypassing the
+/// serial console, which can't carry large payloads). Used to push files into a
+/// running sandbox over its sshd.
+fn ssh_proxy_opts(vm_name: &str) -> Vec<String> {
+    vec![
+        "-o".into(), "BatchMode=yes".into(),
+        "-o".into(), "StrictHostKeyChecking=no".into(),
+        "-o".into(), "UserKnownHostsFile=/dev/null".into(),
+        "-o".into(), "ConnectTimeout=20".into(),
+        "-o".into(), "IdentitiesOnly=yes".into(),
+        "-i".into(), ssh_key_path().to_string_lossy().to_string(),
+        "-o".into(), format!("ProxyCommand=heyvm ssh-proxy {}", vm_name),
+    ]
+}
+
+/// Copy a local file into a running sandbox over SSH (via ssh-proxy). Retries a
+/// few times because sshd may take a moment to come up after `start`.
+pub fn scp_into_sandbox(vm_name: &str, local: &std::path::Path, remote: &str) -> Result<(), String> {
+    let target = format!("root@{}:{}", vm_name, remote);
+    let mut last_err = String::new();
+    for attempt in 1..=5 {
+        let mut cmd = Command::new("scp");
+        cmd.args(ssh_proxy_opts(vm_name));
+        cmd.arg(local).arg(&target);
+        match run(&format!("scp(attempt {})", attempt), &mut cmd) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_err = e;
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+        }
+    }
+    Err(format!("scp into sandbox failed after retries: {}", last_err))
+}
+
 // ── Sandbox lifecycle ──
 
 pub fn list_sandboxes() -> Result<String, String> {
     run("list", heyvm_cmd().arg("list"))
+}
+
+/// List ALL sandboxes (running + stopped). Used by the "use existing VM" picker —
+/// a synced/pulled VM is typically stopped, so the default running-only list misses it.
+pub fn list_all_sandboxes() -> Result<String, String> {
+    run("list_all", heyvm_cmd().args(["list", "--all"]))
 }
 
 pub fn sandbox_exists(name: &str) -> bool {

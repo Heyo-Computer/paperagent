@@ -38,19 +38,25 @@ interface PromptConfig {
 }
 
 function loadPromptConfig(): PromptConfig {
-  try {
-    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
-    const parsed = JSON.parse(raw);
-    const verbosity = ["terse", "normal", "detailed"].includes(parsed.spec_verbosity)
-      ? parsed.spec_verbosity
-      : "normal";
-    return {
-      spec_verbosity: verbosity,
-      user_context: typeof parsed.user_context === "string" ? parsed.user_context : "",
-    };
-  } catch {
-    return { spec_verbosity: "normal", user_context: "" };
-  }
+  // Prefer env (passed by the host at agent start) — under KVM the host can't
+  // update the seeded /data/config/agent.json. Fall back to the config file.
+  const fromFile = (() => {
+    try {
+      return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf-8"));
+    } catch {
+      return {};
+    }
+  })();
+
+  const rawVerbosity = process.env.SPEC_VERBOSITY ?? fromFile.spec_verbosity;
+  const verbosity = ["terse", "normal", "detailed"].includes(rawVerbosity)
+    ? (rawVerbosity as PromptConfig["spec_verbosity"])
+    : "normal";
+  const userContext =
+    process.env.USER_CONTEXT ??
+    (typeof fromFile.user_context === "string" ? fromFile.user_context : "");
+
+  return { spec_verbosity: verbosity, user_context: userContext };
 }
 
 function verbosityInstruction(verbosity: PromptConfig["spec_verbosity"]): string {
@@ -555,12 +561,27 @@ function wrapUser(provider: ChatProvider, text: string): ProviderMessage {
 }
 
 export class Agent {
-  private provider: ChatProvider;
+  // Provider is constructed lazily on first chat so the storage server can boot
+  // (and serve all RPCs) even when no LLM API key is configured. Constructing it
+  // eagerly throws when ANTHROPIC_API_KEY/OPENROUTER_API_KEY is unset.
+  private _provider?: ChatProvider;
   private history: ProviderMessage[] = [];
 
-  constructor() {
-    this.provider = pickProvider();
-    console.log(`Agent using provider=${this.provider.name} model=${this.provider.model}`);
+  constructor() {}
+
+  private get provider(): ChatProvider {
+    if (!this._provider) {
+      // Check the key up front — the SDK clients construct fine without one and
+      // only fail at request time, so this gives a clear message instead.
+      const which = (process.env.LLM_PROVIDER ?? "anthropic").toLowerCase();
+      const keyVar = which === "openrouter" ? "OPENROUTER_API_KEY" : "ANTHROPIC_API_KEY";
+      if (!process.env[keyVar]) {
+        throw new Error("No API key configured — set your API key in Settings to use chat.");
+      }
+      this._provider = pickProvider();
+      console.log(`Agent using provider=${this._provider.name} model=${this._provider.model}`);
+    }
+    return this._provider;
   }
 
   async chat(userMessage: string): Promise<AgentMessage> {

@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { DATA_DIR } from "./paths.js";
 
-const CALENDAR_CACHE = "/data/calendar/events.json";
+const CALENDAR_CACHE = path.join(DATA_DIR, "calendar", "events.json");
 
 interface CalendarEvent {
   id: string;
@@ -11,6 +13,29 @@ interface CalendarEvent {
   location: string;
   meeting_url: string;
   attendees: string[];
+}
+
+/** Merge freshly-fetched events into the cache (dedupe by id, or start|summary
+ * when id is empty; the fetched copy wins), sort by start_time, and persist.
+ * Ports services/storage.rs::save_calendar_events so the cache lives in the VM. */
+export function saveEvents(events: CalendarEvent[]): { count: number } {
+  fs.mkdirSync(path.dirname(CALENDAR_CACHE), { recursive: true });
+  const key = (e: CalendarEvent) => (e.id ? e.id : `${e.start_time}|${e.summary}`);
+  const merged = loadEvents();
+  const index = new Map<string, number>();
+  merged.forEach((e, i) => index.set(key(e), i));
+  for (const ev of events) {
+    const k = key(ev);
+    const at = index.get(k);
+    if (at !== undefined) merged[at] = ev;
+    else {
+      index.set(k, merged.length);
+      merged.push(ev);
+    }
+  }
+  merged.sort((a, b) => a.start_time.localeCompare(b.start_time));
+  fs.writeFileSync(CALENDAR_CACHE, JSON.stringify(merged, null, 2), "utf-8");
+  return { count: merged.length };
 }
 
 function loadEvents(): CalendarEvent[] {

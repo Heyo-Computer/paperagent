@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { STORAGE_DIR } from "./paths.js";
 
-const STORAGE_ROOT = path.join("/data", "storage");
-const LISTS_ROOT = path.join(STORAGE_ROOT, "lists");
+const LISTS_ROOT = path.join(STORAGE_DIR, "lists");
 const LISTS_INDEX = path.join(LISTS_ROOT, "index.json");
 
 export type FieldKind = "text" | "number" | "date" | "bool" | "select";
@@ -25,6 +25,8 @@ export interface ListItem {
   id: string;
   values: Record<string, unknown>;
   linked_todos: TodoRef[];
+  /** Soft-hide flag. Archived items are kept but hidden from the default view. */
+  archived?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -76,6 +78,7 @@ export function loadList(listId: string): List | null {
         ...it,
         values: it.values ?? {},
         linked_todos: it.linked_todos ?? [],
+        archived: it.archived ?? false,
         created_at: it.created_at || "",
         updated_at: it.updated_at || "",
       }));
@@ -172,6 +175,7 @@ export function addListItem(listId: string, values: Record<string, unknown>): Li
     id: randomUUID(),
     values: values ?? {},
     linked_todos: [],
+    archived: false,
     created_at: now,
     updated_at: now,
   });
@@ -186,6 +190,7 @@ export function updateListItem(listId: string, item: ListItem): List {
   const existing = list.items.find((i) => i.id === item.id);
   if (existing) {
     existing.values = item.values;
+    existing.archived = item.archived ?? false;
     existing.updated_at = new Date().toISOString();
   }
   list.updated_at = new Date().toISOString();

@@ -10,3 +10,4 @@ pub mod deploy;
 pub mod lists;
 pub mod books;
 pub mod links;
+pub mod migration;

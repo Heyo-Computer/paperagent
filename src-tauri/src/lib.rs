@@ -86,11 +86,13 @@ pub fn run() {
             commands::heyvm::vm_status,
             commands::heyvm::snapshot_vm,
             commands::heyvm::list_sandboxes,
+            commands::heyvm::list_vms,
             // Agent
             commands::agent::setup_agent,
             commands::agent::start_agent,
             commands::agent::stop_agent,
             commands::agent::update_agent,
+            commands::agent::use_existing_vm,
             commands::agent::send_message,
             commands::agent::agent_status,
             commands::agent::get_chat_history,
@@ -155,6 +157,10 @@ pub fn run() {
             commands::links::unlink_todo_from_book_page,
             commands::links::create_page_from_todo,
             commands::links::create_list_item_from_todo,
+            // Migration
+            commands::migration::migrate_local_to_sandbox,
+            commands::migration::migration_stats,
+            commands::migration::export_sandbox_to_local,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

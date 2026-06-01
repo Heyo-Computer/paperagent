@@ -25,6 +25,8 @@ export const isAgentLoading = signal<boolean>(false);
 
 // Agent
 export const agentStatus = signal<AgentStatus>("disconnected");
+// Latest provisioning/setup progress message (shown on the boot overlay).
+export const setupProgress = signal<string>("");
 export const agentMode = signal<AgentMode>("local");
 export const deployUrl = signal<string | null>(null);
 

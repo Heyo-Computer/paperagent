@@ -1,3 +1,12 @@
+//! Local-filesystem storage implementation.
+//!
+//! The sandbox agent (agent/src/tools/*) is now the single source of truth for
+//! data, so most of this module is no longer wired into commands. It is retained
+//! as a reference implementation and for `calendar.rs`'s event-cache write plus
+//! the `ItemFromTodo`/`PageFromTodo` link result types. Allow dead code rather
+//! than delete, so the local format stays documented in one place.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use crate::models::todo::{Backlog, DayEntry, TodoItem};
 use crate::models::list::{List, ListSummary};
