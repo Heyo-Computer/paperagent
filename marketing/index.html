@@ -1,269 +1,509 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>paperagent — Your AI-powered task agent</title>
-  <meta name="description" content="paperagent is a desktop app that pairs an interactive task manager with a local AI agent running in its own sandbox. Delegate tasks, review artifacts, and stay in control.">
-  <meta property="og:title" content="paperagent — Your AI-powered task agent">
-  <meta property="og:description" content="A desktop app that pairs a task manager with a local AI agent. Delegate tasks, review artifacts, stay in control.">
-  <meta property="og:image" content="assets/icon-512.png">
-  <meta property="og:type" content="website">
-  <meta name="twitter:card" content="summary">
-  <link rel="icon" href="assets/icon-128.png">
-  <link rel="stylesheet" href="style.css">
-</head>
-<body>
-
-  <!-- Nav -->
-  <nav class="nav">
-    <div class="nav-inner">
-      <a href="#" class="nav-brand">
-        <img src="assets/icon-128.png" alt="paperagent logo" width="28" height="28">
-        paperagent
-      </a>
-      <button class="nav-hamburger" aria-label="Menu">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-          <line x1="3" y1="5" x2="17" y2="5"/>
-          <line x1="3" y1="10" x2="17" y2="10"/>
-          <line x1="3" y1="15" x2="17" y2="15"/>
-        </svg>
-      </button>
-      <ul class="nav-links">
-        <li><a href="#features">Features</a></li>
-        <li><a href="#how-it-works">How it works</a></li>
-        <li><a href="#cta" class="btn btn-primary btn-sm">Download</a></li>
-      </ul>
-    </div>
-  </nav>
-
-  <!-- Hero -->
-  <section class="hero section" id="hero">
-    <div class="hero-shader" aria-hidden></div>
-    <div class="container">
-      <h1 class="hero-headline">Your tasks. An AI agent.<br>Real work done.</h1>
-      <p class="hero-subheadline">paperagent is a desktop app that pairs an interactive task manager with a local AI agent running in its own sandbox. Delegate tasks, review artifacts, and stay in control.</p>
-      <div class="hero-buttons">
-        <a href="#cta" class="btn btn-primary">Download for free</a>
-        <a href="#how-it-works" class="btn btn-ghost">See how it works</a>
-      </div>
-
-      <!-- CSS App Mockup -->
-      <div class="mockup reveal">
-        <div class="mockup-titlebar">
-          <span class="mockup-dot"></span>
-          <span class="mockup-dot"></span>
-          <span class="mockup-dot"></span>
-          <span class="mockup-titlebar-text">paperagent</span>
-        </div>
-        <div class="mockup-body">
-          <div class="mockup-tasks">
-            <div class="mockup-day">Sat</div>
-            <div class="mockup-day today">Sun &middot; Today</div>
-            <div class="mockup-task">
-              <span class="mockup-checkbox checked"></span>
-              <span class="done">Research competitor pricing</span>
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="color-scheme" content="light dark" />
+        <title>paperagent — a minimal personal agent</title>
+        <meta
+            name="description"
+            content="paperagent is a desktop app that pairs an interactive task manager with a local AI agent running in its own sandbox. Delegate tasks, review artifacts, and stay in control."
+        />
+        <meta
+            property="og:title"
+            content="paperagent — Your AI-powered task agent"
+        />
+        <meta
+            property="og:description"
+            content="A desktop app that pairs a task manager with a local AI agent. Delegate tasks, review artifacts, stay in control."
+        />
+        <meta property="og:image" content="assets/icon-512.png" />
+        <meta property="og:type" content="website" />
+        <meta name="twitter:card" content="summary" />
+        <link rel="icon" href="assets/icon-128.png" />
+        <link rel="stylesheet" href="style.css" />
+    </head>
+    <body>
+        <!-- Nav -->
+        <nav class="nav">
+            <div class="nav-inner">
+                <a href="#" class="nav-brand">
+                    <img
+                        src="assets/icon-128.png"
+                        alt="paperagent logo"
+                        width="28"
+                        height="28"
+                    />
+                    paperagent
+                </a>
+                <button class="nav-hamburger" aria-label="Menu">
+                    <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 20 20"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="1.5"
+                        stroke-linecap="round"
+                    >
+                        <line x1="3" y1="5" x2="17" y2="5" />
+                        <line x1="3" y1="10" x2="17" y2="10" />
+                        <line x1="3" y1="15" x2="17" y2="15" />
+                    </svg>
+                </button>
+                <ul class="nav-links">
+                    <li><a href="#features">Features</a></li>
+                    <li><a href="#how-it-works">How it works</a></li>
+                    <li>
+                        <a
+                            href="https://github.com/heyo-computer/paperagent/releases"
+                            class="btn btn-primary btn-sm"
+                            >Download</a
+                        >
+                    </li>
+                </ul>
             </div>
-            <div class="mockup-task">
-              <span class="mockup-checkbox"></span>
-              <span>Draft landing page copy</span>
-            </div>
-            <div class="mockup-task">
-              <span class="mockup-checkbox"></span>
-              <span>Set up CI pipeline for staging</span>
-            </div>
-          </div>
-          <div class="mockup-chat">
-            <div class="mockup-bubble user">Set up the CI pipeline using GitHub Actions</div>
-            <div class="mockup-bubble assistant">Done. I created .github/workflows/staging.yml with build, test, and deploy steps. The artifact is saved.</div>
-            <div class="mockup-input">
-              <span class="mockup-input-text">Ask the agent...</span>
-              <span class="mockup-input-btn">
-                <svg viewBox="0 0 12 12"><path d="M6 1v10M1 6l5-5 5 5"/></svg>
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
+        </nav>
 
-  <!-- Features -->
-  <section class="features section" id="features">
-    <div class="container">
-      <h2 class="section-title">Built for people who get things done</h2>
-      <p class="section-subtitle">A task manager that doesn't just organize your work — it does it.</p>
-
-      <div class="features-grid">
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="9 16 11 18 15 14"/>
-            </svg>
-          </div>
-          <h3>Calendar &amp; to-dos merged</h3>
-          <p>Your schedule and your tasks live in one place. Plan by day and check things off without switching apps.</p>
-        </div>
-
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
-            </svg>
-          </div>
-          <h3>Lists</h3>
-          <p>Group related items into focused lists. Keep projects, ideas, and recurring routines organized your way.</p>
-        </div>
-
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
-            </svg>
-          </div>
-          <h3>Books</h3>
-          <p>Collect long-form notes and references into books — durable knowledge your agent can read and build on.</p>
-        </div>
-
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" y1="8" x2="2" y2="22"/><line x1="17.5" y1="15" x2="9" y2="15"/>
-            </svg>
-          </div>
-          <h3>Lightweight agent</h3>
-          <p>A fast, focused agent that stays out of your way. Minimal overhead, quick to spin up, easy to steer.</p>
-        </div>
-
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>
-            </svg>
-          </div>
-          <h3>Portable sandbox</h3>
-          <p>The agent runs in an isolated VM that travels with you — run it locally or in the cloud, same environment everywhere.</p>
-        </div>
-
-        <div class="feature-card reveal">
-          <div class="feature-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>
-            </svg>
-          </div>
-          <h3>Multi-modal</h3>
-          <p>Work across text, images, and files. Hand the agent whatever you've got and let it reason over all of it.</p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- How It Works -->
-  <section class="section" id="how-it-works">
-    <div class="container">
-      <h2 class="section-title">How it works</h2>
-      <p class="section-subtitle">A focused board, fast references, and an agent that's one command away.</p>
-
-      <div class="showcase">
-
-        <!-- Week view -->
-        <div class="showcase-row reveal">
-          <div class="showcase-text">
-            <span class="showcase-eyebrow">Week view</span>
-            <h3>Cut the noise</h3>
-            <p>The board shows just the last week. Empty and finished days collapse on their own, so today's work is always front and center — no infinite backlog to scroll past.</p>
-          </div>
-          <div class="showcase-visual">
-            <div class="ex ex-week">
-              <div class="ex-week-row muted"><span>Thu</span><span class="ex-week-empty">clear</span></div>
-              <div class="ex-week-row muted"><span>Fri</span><span class="ex-week-empty">clear</span></div>
-              <div class="ex-week-row collapsed"><span>Sat</span><span class="ex-week-count">2 done</span></div>
-              <div class="ex-week-row active">
-                <div class="ex-week-head"><span>Sun &middot; Today</span><span class="ex-week-count">3</span></div>
-                <div class="ex-week-tasks">
-                  <div class="ex-task done"><i class="ex-dot checked"></i><span>Research competitor pricing</span></div>
-                  <div class="ex-task"><i class="ex-dot"></i><span>Draft landing page copy</span></div>
-                  <div class="ex-task"><i class="ex-dot"></i><span>Set up CI pipeline</span></div>
+        <!-- Hero -->
+        <section class="hero section" id="hero">
+            <div class="hero-shader" aria-hidden></div>
+            <div class="container">
+                <h1 class="hero-headline">A minimal personal agent.</h1>
+                <p class="hero-subheadline">
+                    paperagent is a desktop app that pairs a task & content
+                    manager with an AI agent running in its own sandbox.
+                    Calendar events merged with a to-do list. Simple markdown
+                    docs. List management. <br />
+                    An agent that's not too extra.
+                </p>
+                <div class="hero-buttons">
+                    <a
+                        href="https://github.com/heyo-computer/paperagent/releases"
+                        class="btn btn-primary"
+                        >Download for free</a
+                    >
+                    <a href="#how-it-works" class="btn btn-ghost"
+                        >See how it works</a
+                    >
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
 
-        <!-- @ mentions -->
-        <div class="showcase-row reveal reverse">
-          <div class="showcase-text">
-            <span class="showcase-eyebrow">@ mentions</span>
-            <h3>Link anything, instantly</h3>
-            <p>Type <code>@</code> to pull a list, book, or another task right into your spec. The agent follows every reference, so it always works with the full context behind a task.</p>
-          </div>
-          <div class="showcase-visual">
-            <div class="ex ex-mention">
-              <div class="ex-input">Review notes from <span class="ex-token">@</span><span class="ex-caret"></span></div>
-              <div class="ex-menu">
-                <div class="ex-menu-item active">
-                  <span class="ex-menu-ico">&#8801;</span><span class="ex-menu-name">reading-list</span><span class="ex-menu-kind">list</span>
+                <!-- CSS App Mockup -->
+                <div class="mockup reveal">
+                    <div class="mockup-titlebar">
+                        <span class="mockup-dot"></span>
+                        <span class="mockup-dot"></span>
+                        <span class="mockup-dot"></span>
+                        <span class="mockup-titlebar-text">paperagent</span>
+                    </div>
+                    <div class="mockup-body">
+                        <div class="mockup-tasks">
+                            <div class="mockup-day">Sat</div>
+                            <div class="mockup-day today">
+                                Sun &middot; Today
+                            </div>
+                            <div class="mockup-task">
+                                <span class="mockup-checkbox checked"></span>
+                                <span class="done"
+                                    >Research competitor pricing</span
+                                >
+                            </div>
+                            <div class="mockup-task">
+                                <span class="mockup-checkbox"></span>
+                                <span>Draft landing page copy</span>
+                            </div>
+                            <div class="mockup-task">
+                                <span class="mockup-checkbox"></span>
+                                <span>Set up CI pipeline for staging</span>
+                            </div>
+                        </div>
+                        <div class="mockup-chat">
+                            <div class="mockup-bubble user">
+                                /search competitor pricing
+                            </div>
+                            <div class="mockup-bubble assistant">
+                                Found 3 matches across your tasks, lists, and
+                                books &mdash; including &ldquo;Research
+                                competitor pricing&rdquo; from today and your
+                                market-research notes. Tap any result to jump
+                                straight to it.
+                            </div>
+                            <div class="mockup-input">
+                                <span class="mockup-input-text"
+                                    >Ask the agent...</span
+                                >
+                                <span class="mockup-input-btn">
+                                    <svg viewBox="0 0 12 12">
+                                        <path d="M6 1v10M1 6l5-5 5 5" />
+                                    </svg>
+                                </span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <div class="ex-menu-item">
-                  <span class="ex-menu-ico">&#9646;</span><span class="ex-menu-name">product-spec</span><span class="ex-menu-kind">book</span>
-                </div>
-                <div class="ex-menu-item">
-                  <span class="ex-menu-ico">&#9711;</span><span class="ex-menu-name">ship-v2</span><span class="ex-menu-kind">task</span>
-                </div>
-              </div>
             </div>
-          </div>
-        </div>
+        </section>
 
-        <!-- Agent setup -->
-        <div class="showcase-row reveal">
-          <div class="showcase-text">
-            <span class="showcase-eyebrow">Agent setup</span>
-            <h3>One command to a working agent</h3>
-            <p>Bring your Anthropic API key and the agent boots into a portable sandbox — your local directory mounted in, real shell and tools ready. No containers to wire up by hand.</p>
-          </div>
-          <div class="showcase-visual">
-            <div class="ex ex-setup">
-              <div class="ex-term-bar">
-                <span class="mockup-dot"></span><span class="mockup-dot"></span><span class="mockup-dot"></span>
-              </div>
-              <div class="ex-term">
-                <div class="ex-term-line"><span class="ex-prompt">$</span> paperagent agent up</div>
-                <div class="ex-term-line ex-muted">&rarr; provisioning sandbox&hellip;</div>
-                <div class="ex-term-line ex-muted">&rarr; mounting ~/paperagent</div>
-                <div class="ex-term-line ex-ok">&check; agent ready &middot; claude-opus</div>
-              </div>
+        <!-- Features -->
+        <section class="features section" id="features">
+            <div class="container">
+                <h2 class="section-title">
+                    Built for people who get things done
+                </h2>
+                <p class="section-subtitle">
+                    A task manager that doesn't just organize your work — it
+                    does it.
+                </p>
+
+                <div class="features-grid">
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <rect
+                                    x="3"
+                                    y="4"
+                                    width="18"
+                                    height="18"
+                                    rx="2"
+                                />
+                                <line x1="16" y1="2" x2="16" y2="6" />
+                                <line x1="8" y1="2" x2="8" y2="6" />
+                                <line x1="3" y1="10" x2="21" y2="10" />
+                                <polyline points="9 16 11 18 15 14" />
+                            </svg>
+                        </div>
+                        <h3>Calendar &amp; to-dos merged</h3>
+                        <p>
+                            Your schedule and your tasks live in one place. Plan
+                            by day and check things off without switching apps.
+                        </p>
+                    </div>
+
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <line x1="8" y1="6" x2="21" y2="6" />
+                                <line x1="8" y1="12" x2="21" y2="12" />
+                                <line x1="8" y1="18" x2="21" y2="18" />
+                                <line x1="3" y1="6" x2="3.01" y2="6" />
+                                <line x1="3" y1="12" x2="3.01" y2="12" />
+                                <line x1="3" y1="18" x2="3.01" y2="18" />
+                            </svg>
+                        </div>
+                        <h3>Lists</h3>
+                        <p>
+                            Group related items into focused lists. Keep
+                            projects, ideas, and recurring routines organized
+                            your way.
+                        </p>
+                    </div>
+
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                                <path
+                                    d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"
+                                />
+                            </svg>
+                        </div>
+                        <h3>Books</h3>
+                        <p>
+                            Collect long-form notes and references into books —
+                            durable knowledge your agent can read and build on.
+                        </p>
+                    </div>
+
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path
+                                    d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"
+                                />
+                                <line x1="16" y1="8" x2="2" y2="22" />
+                                <line x1="17.5" y1="15" x2="9" y2="15" />
+                            </svg>
+                        </div>
+                        <h3>Lightweight agent</h3>
+                        <p>
+                            A fast, focused agent that stays out of your way.
+                            Minimal overhead, quick to spin up, easy to steer.
+                        </p>
+                    </div>
+
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <path
+                                    d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"
+                                />
+                                <polyline
+                                    points="3.27 6.96 12 12.01 20.73 6.96"
+                                />
+                                <line x1="12" y1="22.08" x2="12" y2="12" />
+                            </svg>
+                        </div>
+                        <h3>Portable sandbox</h3>
+                        <p>
+                            The agent runs in an isolated VM that travels with
+                            you — run it locally or in the cloud, same
+                            environment everywhere.
+                        </p>
+                    </div>
+
+                    <div class="feature-card reveal">
+                        <div class="feature-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                            >
+                                <polygon points="12 2 2 7 12 12 22 7 12 2" />
+                                <polyline points="2 17 12 22 22 17" />
+                                <polyline points="2 12 12 17 22 12" />
+                            </svg>
+                        </div>
+                        <h3>Multi-modal</h3>
+                        <p>
+                            Work across text, images, and files. Hand the agent
+                            whatever you've got and let it reason over all of
+                            it.
+                        </p>
+                    </div>
+                </div>
             </div>
-          </div>
-        </div>
+        </section>
 
-      </div>
-    </div>
-  </section>
+        <!-- How It Works -->
+        <section class="section" id="how-it-works">
+            <div class="container">
+                <h2 class="section-title">How it works</h2>
+                <p class="section-subtitle">
+                    A focused board, fast references, and an agent that's one
+                    command away.
+                </p>
 
-  <!-- CTA -->
-  <section class="cta section" id="cta">
-    <div class="container">
-      <h2 class="cta-headline">Ready to try paperagent?</h2>
-      <p class="cta-sub">Free to use. Bring your own Anthropic API key.</p>
-      <a href="#" class="btn btn-primary">Download now</a>
-      <p class="cta-platforms">Available for macOS, Linux, and Windows</p>
-    </div>
-  </section>
+                <div class="showcase">
+                    <!-- Week view -->
+                    <div class="showcase-row reveal">
+                        <div class="showcase-text">
+                            <span class="showcase-eyebrow">Week view</span>
+                            <h3>Cut the noise</h3>
+                            <p>
+                                The board shows just the last week. Empty and
+                                finished days collapse on their own, so today's
+                                work is always front and center — no infinite
+                                backlog to scroll past.
+                            </p>
+                        </div>
+                        <div class="showcase-visual">
+                            <div class="ex ex-week">
+                                <div class="ex-week-row muted">
+                                    <span>Thu</span
+                                    ><span class="ex-week-empty">clear</span>
+                                </div>
+                                <div class="ex-week-row muted">
+                                    <span>Fri</span
+                                    ><span class="ex-week-empty">clear</span>
+                                </div>
+                                <div class="ex-week-row collapsed">
+                                    <span>Sat</span
+                                    ><span class="task-meter" title="2 tasks"
+                                        ><i class="task-meter-bar"></i
+                                        ><i class="task-meter-bar"></i
+                                    ></span>
+                                </div>
+                                <div class="ex-week-row active">
+                                    <div class="ex-week-head">
+                                        <span>Sun &middot; Today</span
+                                        ><span
+                                            class="task-meter"
+                                            title="3 tasks"
+                                            ><i class="task-meter-bar"></i
+                                            ><i class="task-meter-bar"></i
+                                            ><i class="task-meter-bar"></i
+                                        ></span>
+                                    </div>
+                                    <div class="ex-week-tasks">
+                                        <div class="ex-task done">
+                                            <i class="ex-dot checked"></i
+                                            ><span
+                                                >Research competitor
+                                                pricing</span
+                                            >
+                                        </div>
+                                        <div class="ex-task">
+                                            <i class="ex-dot"></i
+                                            ><span
+                                                >Draft landing page copy</span
+                                            >
+                                        </div>
+                                        <div class="ex-task">
+                                            <i class="ex-dot"></i
+                                            ><span>Set up CI pipeline</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
-  <!-- Footer -->
-  <footer class="footer">
-    <div class="container footer-inner">
-      <span class="footer-brand">paperagent &copy; 2026 Heyo</span>
-      <ul class="footer-links">
-        <li><a href="https://github.com">GitHub</a></li>
-        <li><a href="https://heyo.computer">Heyo</a></li>
-      </ul>
-    </div>
-  </footer>
+                    <!-- @ mentions -->
+                    <div class="showcase-row reveal reverse">
+                        <div class="showcase-text">
+                            <span class="showcase-eyebrow">@ mentions</span>
+                            <h3>Link anything, instantly</h3>
+                            <p>
+                                Type <code>@</code> to pull a list, book, or
+                                another task right into your spec. The agent
+                                follows every reference, so it always works with
+                                the full context behind a task.
+                            </p>
+                        </div>
+                        <div class="showcase-visual">
+                            <div class="ex ex-mention">
+                                <div class="ex-input">
+                                    Review notes from
+                                    <span class="ex-token">@</span
+                                    ><span class="ex-caret"></span>
+                                </div>
+                                <div class="ex-menu">
+                                    <div class="ex-menu-item active">
+                                        <span class="ex-menu-ico">&#8801;</span
+                                        ><span class="ex-menu-name"
+                                            >reading-list</span
+                                        ><span class="ex-menu-kind">list</span>
+                                    </div>
+                                    <div class="ex-menu-item">
+                                        <span class="ex-menu-ico">&#9646;</span
+                                        ><span class="ex-menu-name"
+                                            >product-spec</span
+                                        ><span class="ex-menu-kind">book</span>
+                                    </div>
+                                    <div class="ex-menu-item">
+                                        <span class="ex-menu-ico">&#9711;</span
+                                        ><span class="ex-menu-name"
+                                            >ship-v2</span
+                                        ><span class="ex-menu-kind">task</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
-  <script src="script.js"></script>
-  <script type="module" src="shader.js"></script>
-</body>
+                    <!-- Agent setup -->
+                    <div class="showcase-row reveal">
+                        <div class="showcase-text">
+                            <span class="showcase-eyebrow">Agent setup</span>
+                            <h3>Isolation with portability</h3>
+                            <p>
+                                Bring your Anthropic API key and the agent boots
+                                into a portable sandbox — your local directory
+                                mounted in, real shell and tools ready. No
+                                containers to wire up by hand.
+                            </p>
+                        </div>
+                        <div class="showcase-visual">
+                            <div class="ex ex-setup">
+                                <div class="ex-term-bar">
+                                    <span class="mockup-dot"></span
+                                    ><span class="mockup-dot"></span
+                                    ><span class="mockup-dot"></span>
+                                </div>
+                                <div class="ex-term">
+                                    <div class="ex-term-line">
+                                        <span class="ex-prompt">$</span>
+                                        paperagent agent up
+                                    </div>
+                                    <div class="ex-term-line ex-muted">
+                                        &rarr; provisioning sandbox&hellip;
+                                    </div>
+                                    <div class="ex-term-line ex-muted">
+                                        &rarr; mounting ~/paperagent
+                                    </div>
+                                    <div class="ex-term-line ex-ok">
+                                        &check; agent ready &middot; claude-opus
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="cta section" id="cta">
+            <div class="container">
+                <h2 class="cta-headline">Ready to try paperagent?</h2>
+                <p class="cta-sub">
+                    Free to use. Bring your own Anthropic API key.
+                </p>
+                <a
+                    href="https://github.com/heyo-computer/paperagent/releases"
+                    class="btn btn-primary"
+                    >Download now</a
+                >
+                <p class="cta-platforms">
+                    Available for macOS, Linux, and Windows
+                </p>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="container footer-inner">
+                <span class="footer-brand">paperagent &copy; 2026 Heyo</span>
+                <ul class="footer-links">
+                    <li>
+                        <a href="https://github.com/heyo-computer/paperagent"
+                            >GitHub</a
+                        >
+                    </li>
+                    <li><a href="https://heyo.computer">Heyo</a></li>
+                </ul>
+            </div>
+        </footer>
+
+        <script src="script.js"></script>
+        <script type="module" src="shader.js"></script>
+    </body>
 </html>

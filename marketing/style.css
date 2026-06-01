@@ -630,10 +630,28 @@ img {
   color: var(--color-text-tertiary);
 }
 
-.ex-week-count {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  color: var(--color-text-tertiary);
+/* Heat-map task indicator — mirrors the app's week-view meter: a row of bars
+   that grows and shifts green -> amber -> red as a day's task load increases. */
+.task-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 13px;
+}
+.task-meter-bar {
+  width: 3px;
+  height: 13px;
+  border-radius: 1px;
+  background: #3fb950;
+}
+.task-meter-bar:nth-child(-n + 3) {
+  background: #3fb950;
+}
+.task-meter-bar:nth-child(n + 4):nth-child(-n + 6) {
+  background: #d29922;
+}
+.task-meter-bar:nth-child(n + 7) {
+  background: #f85149;
 }
 
 .ex-week-row.active {
@@ -653,9 +671,6 @@ img {
   font-weight: 700;
 }
 
-.ex-week-head .ex-week-count {
-  color: var(--color-accent);
-}
 
 .ex-week-tasks {
   display: flex;
