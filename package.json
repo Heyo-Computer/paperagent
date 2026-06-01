@@ -10,6 +10,9 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@blocknote/core": "^0.51.3",
+    "@blocknote/mantine": "^0.51.3",
+    "@blocknote/react": "^0.51.3",
     "@paper-design/shaders-react": "^0.0.76",
     "@preact/signals": "^2",
     "@tauri-apps/api": "^2",

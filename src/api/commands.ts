@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo, Backlog, MoveBacklogResult, List, ListField, ListItem, ListSummary, Book, BookSummary } from "../types";
+import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo, Backlog, MoveBacklogResult, List, ListField, ListItem, ListSummary, Book, BookSummary, MigrationCounts, MigrationStatsResult, VmInfo } from "../types";
 
 // Storage commands
 export async function loadDay(date: string): Promise<DayEntry> {
@@ -159,6 +159,20 @@ export async function createListItemFromTodo(date: string, todoId: string, listI
   return invoke("create_list_item_from_todo", { date, todoId, listId });
 }
 
+// Migration — move local-filesystem data into the sandbox
+export async function migrateLocalToSandbox(): Promise<MigrationCounts> {
+  return invoke("migrate_local_to_sandbox");
+}
+
+export async function migrationStats(): Promise<MigrationStatsResult> {
+  return invoke("migration_stats");
+}
+
+// Reconstruct the local ~/.todo directory from the sandbox's current data.
+export async function exportSandboxToLocal(): Promise<MigrationCounts> {
+  return invoke("export_sandbox_to_local");
+}
+
 // Theme commands
 export async function getTheme(): Promise<Theme> {
   return invoke("get_theme");
@@ -187,6 +201,16 @@ export async function vmStatus(): Promise<string> {
 
 export async function listSandboxes(): Promise<string[]> {
   return invoke("list_sandboxes");
+}
+
+// List all VMs (running + stopped) for the "use existing VM" picker.
+export async function listVms(): Promise<VmInfo[]> {
+  return invoke("list_vms");
+}
+
+// Adopt an existing (e.g. synced) VM as the agent and connect to it.
+export async function useExistingVm(vmName: string): Promise<string> {
+  return invoke("use_existing_vm", { vmName });
 }
 
 // Agent commands
@@ -305,6 +329,11 @@ export async function syncCalendarToTodos(): Promise<string> {
 // Month range
 export async function getMonthRange(): Promise<DayEntry[]> {
   return invoke("get_month_range");
+}
+
+// Arbitrary day range (offsets in days relative to today) — backs Week/Month nav.
+export async function getDaysRangeOffset(offsetStart: number, offsetEnd: number): Promise<DayEntry[]> {
+  return invoke("get_days_range_offset", { offsetStart, offsetEnd });
 }
 
 // Speech commands

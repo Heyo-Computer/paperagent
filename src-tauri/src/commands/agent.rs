@@ -107,6 +107,19 @@ pub async fn setup_agent(
         }
     };
 
+    // Deploy agent code to the host data dir BEFORE create, so the `--mount`
+    // seed copies it into the VM's /data/agent at creation. (Under KVM, host
+    // writes after creation don't reach the guest, so seeding is how first-run
+    // code gets in; updates use the in-place push in `update_agent`.)
+    progress(&app, "Preparing agent code...");
+    let agent_src = resolve_agent_source(&app)?;
+    if let Err(e) = deploy_agent_code(&data_dir, &agent_src) {
+        let msg = format!("setup_agent: deploy failed: {}", e);
+        logging::error(&msg);
+        return Err(msg);
+    }
+    logging::info("setup_agent: agent code staged for seed");
+
     // Step 3: Create sandbox with agent port forwarded to host
     progress(&app, "Checking sandbox...");
     if heyvm::sandbox_exists(&vm_name) {
@@ -138,15 +151,11 @@ pub async fn setup_agent(
         Err(e) => logging::warn(&format!("setup_agent: start sandbox returned error (may already be running): {}", e)),
     }
 
-    // Step 4: Deploy agent code
-    progress(&app, "Deploying agent code...");
-    let agent_src = resolve_agent_source(&app)?;
-    if let Err(e) = deploy_agent_code(&data_dir, &agent_src) {
-        let msg = format!("setup_agent: deploy failed: {}", e);
-        logging::error(&msg);
-        return Err(msg);
-    }
-    logging::info("setup_agent: agent code deployed");
+    // Hardening: the `--mount` seed copied the host config (incl. api_key) into the
+    // VM, which would then travel with `heyvm sync`. The agent reads the key from
+    // env, not this file, so scrub secrets from the in-VM copy.
+    let scrub = "node -e 'try{const f=\"/data/config/agent.json\";const c=JSON.parse(require(\"fs\").readFileSync(f));for(const k of [\"api_key\",\"openrouter_api_key\",\"heyo_api_key\",\"speech_api_key\"])delete c[k];require(\"fs\").writeFileSync(f,JSON.stringify(c,null,2))}catch(e){}'";
+    let _ = heyvm::exec_in_sandbox(&vm_name, &["sh", "-c", scrub]);
 
     // Step 5: Install dependencies
     if let Err(e) = npm_install_agent(&vm_name, &app).await {
@@ -400,7 +409,25 @@ fn start_agent_process(vm_name: &str, config: &crate::commands::config::AgentCon
         }
     }
 
-    let start_cmd = format!("cd /data/agent && {} node dist/index.js > /data/logs/agent.log 2>&1 &", env_parts);
+    // Prompt config travels via env: under KVM the host can't write the agent's
+    // /data/config/agent.json (no live mount), so spec verbosity + user context are
+    // passed at start. The agent prefers these over the seeded config file.
+    if !config.spec_verbosity.is_empty() {
+        env_parts.push_str(&format!(" SPEC_VERBOSITY={}", shell_escape(&config.spec_verbosity)));
+    }
+    if !config.user_context.is_empty() {
+        env_parts.push_str(&format!(" USER_CONTEXT={}", shell_escape(&config.user_context)));
+    }
+
+    // Detach the long-lived agent properly: env prefix → `nohup sh -c '<node>'`
+    // (the inner command has no quotes, so the single-quoted env values above don't
+    // need to nest), redirect to /dev/null, background. A plain `&` over the KVM
+    // serial console keeps the exec session open and times out ("Terminated"), so
+    // we also use the json/timeout exec path (same as npm install).
+    let start_cmd = format!(
+        "cd /data/agent && {} nohup sh -c 'node dist/index.js > /data/logs/agent.log 2>&1' > /dev/null 2>&1 &",
+        env_parts
+    );
     logging::info(&format!(
         "start_agent_process: vm={} provider={} model={} (keys redacted)",
         vm_name,
@@ -408,8 +435,8 @@ fn start_agent_process(vm_name: &str, config: &crate::commands::config::AgentCon
         if provider == "openrouter" { &config.openrouter_model } else { &config.model },
     ));
 
-    match heyvm::exec_in_sandbox(vm_name, &["sh", "-c", &start_cmd]) {
-        Ok(out) => logging::info(&format!("start_agent_process: exec returned: {}", out.trim())),
+    match heyvm::exec_in_sandbox_json(vm_name, &["sh", "-c", &start_cmd], Some("15s")) {
+        Ok(out) => logging::info(&format!("start_agent_process: kicked (exit {}): {}", out.exit_code, out.stdout.trim())),
         Err(e) => logging::warn(&format!("start_agent_process: exec error (may be fine for background): {}", e)),
     }
 }
@@ -419,22 +446,55 @@ fn shell_escape(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// Update the agent code by recreating the sandbox.
-///
-/// **Why recreate, not in-place update?** The KVM/firecracker `--mount` is a
-/// point-in-time snapshot (block device, not a live bind mount) — writes to the
-/// host directory after sandbox creation never reach the guest. The only way
-/// the guest sees fresh agent code is to be created with a fresh snapshot.
-///
-/// Flow: drop port-forward + cached URL → `heyvm rm` → re-run setup (which
-/// rebuilds the image if missing, snapshots the now-up-to-date host
-/// `~/.todo/agent`, creates the sandbox, npm-installs, starts, and reconnects).
+/// Tar the agent source and push it into a running sandbox at /data/agent over
+/// SSH (ssh-proxy), then extract. This is the non-destructive code-update path:
+/// the VM's /data (the unit of truth) is preserved. `heyvm exec` can't carry the
+/// payload (no stdin; the serial console times out on large args), so we scp.
+fn push_agent_code(vm_name: &str, agent_src: &std::path::Path) -> Result<(), String> {
+    if !agent_src.join("dist/index.js").exists() {
+        return Err(format!("agent dist/index.js not found at {}", agent_src.display()));
+    }
+    let tmp = std::env::temp_dir().join(format!("todo-agent-{}.tgz", std::process::id()));
+    let status = std::process::Command::new("tar")
+        .arg("czf").arg(&tmp)
+        .arg("-C").arg(agent_src)
+        .arg("--exclude=node_modules")
+        .arg("--exclude=.git")
+        .arg(".")
+        .status()
+        .map_err(|e| format!("tar spawn failed: {}", e))?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err("tar failed to package agent code".to_string());
+    }
+
+    let result = (|| -> Result<(), String> {
+        heyvm::scp_into_sandbox(vm_name, &tmp, "/tmp/agent-upload.tgz")?;
+        heyvm::exec_in_sandbox(vm_name, &["sh", "-c",
+            "rm -rf /data/agent && mkdir -p /data/agent && \
+             tar xzf /tmp/agent-upload.tgz -C /data/agent && \
+             rm -f /tmp/agent-upload.tgz && test -f /data/agent/dist/index.js"])?;
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+/// Stop the running agent process and start it fresh (picks up new code/env).
+fn restart_agent(vm_name: &str, config: &crate::commands::config::AgentConfig) {
+    let _ = heyvm::exec_in_sandbox(vm_name, &["sh", "-c", "pkill -f 'node dist/index.js' || true"]);
+    start_agent_process(vm_name, config);
+}
+
+/// Update the agent **in place**: push fresh code into the running VM and restart,
+/// leaving /data (the unit of truth) intact. Falls back to a safe export→recreate
+/// if the in-place path fails for any reason.
 #[tauri::command]
 pub async fn update_agent(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<String, String> {
-    logging::info("=== update_agent: starting ===");
+    logging::info("=== update_agent: starting (in-place) ===");
 
     let config = read_config(&state);
     let vm_name = {
@@ -444,11 +504,77 @@ pub async fn update_agent(
         if config.vm_name.is_empty() { "todo-agent".to_string() } else { config.vm_name.clone() }
     });
 
+    // No sandbox yet → there's nothing to update in place; do a full setup.
+    if !heyvm::sandbox_exists(&vm_name) {
+        logging::info("update_agent: no sandbox — running full setup");
+        return setup_agent(app.state::<AppState>(), app.clone()).await;
+    }
+
+    let _ = heyvm::start_sandbox(&vm_name);
+    *state.vm_name.lock().unwrap() = Some(vm_name.clone());
+
+    let agent_src = match resolve_agent_source(&app) {
+        Ok(p) => p,
+        Err(e) => return Err(e),
+    };
+
+    progress(&app, "Pushing updated agent code into the sandbox...");
+    match push_agent_code(&vm_name, &agent_src) {
+        Ok(_) => {
+            if let Err(e) = npm_install_agent(&vm_name, &app).await {
+                logging::warn(&format!("update_agent: npm install failed in-place ({}); recreating", e));
+                return update_agent_recreate(state, app).await;
+            }
+            progress(&app, "Restarting agent...");
+            restart_agent(&vm_name, &config);
+            match wait_for_agent(&vm_name, &app, &state).await {
+                Ok(url) => {
+                    *state.agent_url.lock().unwrap() = Some(url);
+                    let _ = app.emit("agent-status", "running");
+                    logging::info("=== update_agent: complete (in-place) ===");
+                    Ok("Agent updated in place".to_string())
+                }
+                Err(e) => {
+                    logging::warn(&format!("update_agent: agent didn't return after in-place update ({}); recreating", e));
+                    update_agent_recreate(state, app).await
+                }
+            }
+        }
+        Err(e) => {
+            logging::warn(&format!("update_agent: in-place push failed ({}); recreating", e));
+            progress(&app, "In-place update unavailable; rebuilding sandbox safely...");
+            update_agent_recreate(state, app).await
+        }
+    }
+}
+
+/// Fallback updater: export the VM's data to `~/.todo` first (so no data is lost),
+/// then recreate the sandbox, which reseeds `/data` from that fresh export.
+async fn update_agent_recreate(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    logging::info("=== update_agent_recreate: starting ===");
+
+    let config = read_config(&state);
+    let vm_name = {
+        let lock = state.vm_name.lock().unwrap();
+        lock.clone()
+    }.unwrap_or_else(|| {
+        if config.vm_name.is_empty() { "todo-agent".to_string() } else { config.vm_name.clone() }
+    });
     let data_dir = if config.data_dir.is_empty() {
         state.data_dir.to_string_lossy().to_string()
     } else {
         config.data_dir.clone()
     };
+
+    // Export VM data → host so the recreate reseeds from current data (the VM is the
+    // unit of truth; preserve writes made since creation).
+    progress(&app, "Backing up sandbox data to ~/.todo...");
+    if let Err(e) = crate::commands::migration::export_to_local(&state).await {
+        logging::warn(&format!("update_agent_recreate: export failed (continuing): {}", e));
+    }
 
     progress(&app, "Disconnecting from agent...");
     state.kill_port_forward();
@@ -458,7 +584,7 @@ pub async fn update_agent(
     progress(&app, "Refreshing agent code on host...");
     let agent_src = resolve_agent_source(&app)?;
     if let Err(e) = deploy_agent_code(&data_dir, &agent_src) {
-        let msg = format!("update_agent: host refresh failed: {}", e);
+        let msg = format!("update_agent_recreate: host refresh failed: {}", e);
         logging::error(&msg);
         return Err(msg);
     }
@@ -466,14 +592,79 @@ pub async fn update_agent(
     if heyvm::sandbox_exists(&vm_name) {
         progress(&app, &format!("Removing sandbox '{}'...", vm_name));
         if let Err(e) = heyvm::rm_sandbox(&vm_name) {
-            logging::warn(&format!("update_agent: rm sandbox returned error (continuing): {}", e));
+            logging::warn(&format!("update_agent_recreate: rm returned error (continuing): {}", e));
         }
     }
 
-    // setup_agent (the existing flow) does: ensure dirs → check image → create
-    // sandbox with snapshot of host `data_dir` → start → npm install → start
-    // agent → wait. With the sandbox just removed it will create it fresh.
+    // setup_agent reseeds /data from the just-exported ~/.todo, then starts fresh.
     setup_agent(state, app).await
+}
+
+/// Adopt an existing sandbox as the agent VM and connect to it — without
+/// provisioning or seeding. Supports the "I synced my VM to another workstation"
+/// flow: `heyvm sync pull` lands a self-contained VM (data + agent code in /data),
+/// and this points the app at it. Persists `vm_name` so future launches reuse it.
+#[tauri::command]
+pub async fn use_existing_vm(
+    vm_name: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let vm_name = vm_name.trim().to_string();
+    if vm_name.is_empty() {
+        return Err("No VM selected".to_string());
+    }
+    logging::info(&format!("use_existing_vm: adopting '{}'", vm_name));
+    let _ = app.emit("agent-status", "starting");
+
+    if !heyvm::sandbox_exists(&vm_name) {
+        let _ = app.emit("agent-status", "error");
+        return Err(format!("Sandbox '{}' not found", vm_name));
+    }
+
+    // Persist vm_name so auto_start uses it on future launches.
+    let mut config = read_config(&state);
+    config.vm_name = vm_name.clone();
+    if let Err(e) = write_config(&state, &config) {
+        logging::warn(&format!("use_existing_vm: failed to persist vm_name: {}", e));
+    }
+    *state.vm_name.lock().unwrap() = Some(vm_name.clone());
+
+    // Start the sandbox (it may be stopped after a sync pull), then the agent
+    // process. We trust the VM's synced /data/agent code — use "Update Agent" to
+    // push this machine's agent version if they differ.
+    progress(&app, &format!("Starting VM '{}'...", vm_name));
+    match heyvm::start_sandbox(&vm_name) {
+        Ok(out) => logging::info(&format!("use_existing_vm: start: {}", out.trim())),
+        Err(e) => logging::warn(&format!("use_existing_vm: start returned error (may already be running): {}", e)),
+    }
+
+    progress(&app, "Starting agent service...");
+    // restart (pkill + start) so adopting an already-running VM doesn't leave a
+    // duplicate node fighting for the port.
+    restart_agent(&vm_name, &config);
+
+    match wait_for_agent(&vm_name, &app, &state).await {
+        Ok(url) => {
+            *state.agent_url.lock().unwrap() = Some(url);
+            let _ = app.emit("agent-status", "running");
+            logging::info(&format!("use_existing_vm: connected to '{}'", vm_name));
+            Ok(format!("Connected to existing VM '{}'", vm_name))
+        }
+        Err(e) => {
+            let _ = app.emit("agent-status", "error");
+            logging::error(&format!("use_existing_vm: connection failed: {}", e));
+            Err(e)
+        }
+    }
+}
+
+/// Persist the agent config to disk (mirrors set_agent_config's write).
+fn write_config(state: &AppState, config: &crate::commands::config::AgentConfig) -> Result<(), String> {
+    std::fs::create_dir_all(&state.config_dir).map_err(|e| e.to_string())?;
+    let path = state.config_dir.join("agent.json");
+    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+    std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
 /// Poll `establish_host_connection` until it succeeds or 30s elapses.
@@ -573,18 +764,21 @@ pub async fn auto_start_agent(app: AppHandle) {
         }
     }
 
-    // Local mode: existing auto-start logic
+    // Local mode. The sandbox is the single source of truth for data, so we start
+    // it on every launch regardless of whether an LLM key is configured — the agent
+    // serves storage RPCs keyless; the key only enables chat.
     let config = read_config(&state);
-
-    if config.api_key.is_empty() {
-        logging::info("auto_start: no API key configured, skipping");
-        return;
-    }
-
     let vm_name = if config.vm_name.is_empty() { "todo-agent".to_string() } else { config.vm_name.clone() };
 
     if !heyvm::sandbox_exists(&vm_name) {
-        logging::info(&format!("auto_start: sandbox '{}' does not exist, skipping", vm_name));
+        // First launch (or a wiped sandbox): provision it end-to-end. setup_agent
+        // builds the image if needed, creates+starts the sandbox, deploys the agent
+        // code, installs deps, starts the agent process, and sets agent_url.
+        logging::info(&format!("auto_start: sandbox '{}' missing — provisioning", vm_name));
+        if let Err(e) = setup_agent(app.state::<AppState>(), app.clone()).await {
+            logging::error(&format!("auto_start: provisioning failed: {}", e));
+            let _ = app.emit("agent-status", "error");
+        }
         return;
     }
 

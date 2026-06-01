@@ -5,9 +5,11 @@ import {
   getCalendarConfig, setCalendarConfig,
   getCalendarStatus, connectGoogleCalendar,
   disconnectGoogleCalendar, syncCalendarToTodos,
+  migrateLocalToSandbox, migrationStats, exportSandboxToLocal,
+  listVms, useExistingVm,
 } from "../../api/commands";
 import { themeList, setTheme } from "../../theme/ThemeProvider";
-import type { AgentConfig, CalendarConfig, CalendarStatus } from "../../types";
+import type { AgentConfig, CalendarConfig, CalendarStatus, MigrationStatsResult, VmInfo } from "../../types";
 
 const MODELS = [
   { value: "claude-sonnet-4-6-20250514", label: "Claude Sonnet 4.6" },
@@ -16,9 +18,9 @@ const MODELS = [
 ];
 
 const BACKENDS = [
-  { value: "libvirt", label: "Libvirt (Linux, recommended)" },
-  { value: "kvm", label: "KVM (Linux)" },
+  { value: "kvm", label: "KVM (Linux, recommended)" },
   { value: "firecracker", label: "Firecracker (Linux)" },
+  { value: "libvirt", label: "Libvirt (Linux, live host mount)" },
   { value: "apple_vf", label: "Apple VF (macOS)" },
   { value: "docker", label: "Docker" },
   { value: "bubblewrap", label: "Bubblewrap" },
@@ -85,6 +87,38 @@ export function SettingsPanel() {
   const [calMessage, setCalMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [migStats, setMigStats] = useState<MigrationStatsResult | null>(null);
+  const [migBusy, setMigBusy] = useState(false);
+  const [migMessage, setMigMessage] = useState("");
+  const [vms, setVms] = useState<VmInfo[]>([]);
+  const [selectedVm, setSelectedVm] = useState("");
+  const [vmBusy, setVmBusy] = useState(false);
+  const [vmMessage, setVmMessage] = useState("");
+
+  async function refreshVms() {
+    try {
+      const list = await listVms();
+      setVms(list);
+    } catch (err) {
+      setVmMessage(`${err}`);
+    }
+  }
+
+  async function handleUseExistingVm() {
+    if (!selectedVm) return;
+    setVmBusy(true);
+    setVmMessage("");
+    try {
+      const msg = await useExistingVm(selectedVm);
+      setConfig((c) => ({ ...c, vm_name: selectedVm }));
+      agentName.value = selectedVm;
+      setVmMessage(msg);
+    } catch (err) {
+      setVmMessage(`${err}`);
+    } finally {
+      setVmBusy(false);
+    }
+  }
 
   useEffect(() => {
     getAgentConfig().then((c) => {
@@ -95,6 +129,45 @@ export function SettingsPanel() {
     getCalendarConfig().then(setCalConfig).catch(() => {});
     getCalendarStatus().then(setCalStatus).catch(() => {});
   }, []);
+
+  // Load migration counts when the panel opens (best-effort; needs the agent up).
+  useEffect(() => {
+    if (!settingsOpen.value) return;
+    migrationStats().then(setMigStats).catch(() => setMigStats(null));
+    refreshVms();
+  }, [settingsOpen.value]);
+
+  async function handleMigrate() {
+    setMigBusy(true);
+    setMigMessage("");
+    try {
+      const r = await migrateLocalToSandbox();
+      setMigMessage(
+        `Imported ${r.todos} todos, ${r.backlog} backlog, ${r.lists} lists, ${r.books} books, ${r.artifacts} artifacts.`,
+      );
+      migrationStats().then(setMigStats).catch(() => {});
+    } catch (err) {
+      setMigMessage(`${err}`);
+    } finally {
+      setMigBusy(false);
+    }
+  }
+
+  async function handleExport() {
+    setMigBusy(true);
+    setMigMessage("");
+    try {
+      const r = await exportSandboxToLocal();
+      setMigMessage(
+        `Exported ${r.todos} todos, ${r.backlog} backlog, ${r.lists} lists, ${r.books} books, ${r.artifacts} artifacts to ~/.todo.`,
+      );
+      migrationStats().then(setMigStats).catch(() => {});
+    } catch (err) {
+      setMigMessage(`${err}`);
+    } finally {
+      setMigBusy(false);
+    }
+  }
 
   async function handleSave() {
     setSaving(true);
@@ -282,6 +355,41 @@ export function SettingsPanel() {
               placeholder="todo-agent"
             />
           </label>
+
+          <div class="settings-field">
+            <span class="settings-label">Use existing VM</span>
+            <span class="settings-hint">
+              Connect to a VM that already exists on this machine — e.g. one you
+              transferred here with <code>heyvm sync</code>. Starts and adopts it
+              without provisioning or wiping its data.
+            </span>
+            <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "6px" }}>
+              <select
+                class="settings-select"
+                value={selectedVm}
+                onChange={(e) => setSelectedVm(e.currentTarget.value)}
+                style={{ flex: "1" }}
+              >
+                <option value="">Select a VM…</option>
+                {vms.map((vm) => (
+                  <option key={vm.name} value={vm.name}>
+                    {vm.name} — {vm.status}{vm.backend ? ` (${vm.backend})` : ""}
+                  </option>
+                ))}
+              </select>
+              <button class="btn btn-sm btn-ghost" onClick={refreshVms} title="Refresh list">↻</button>
+              <button
+                class="btn btn-sm btn-primary"
+                onClick={handleUseExistingVm}
+                disabled={vmBusy || !selectedVm}
+              >
+                {vmBusy ? "Connecting…" : "Use this VM"}
+              </button>
+            </div>
+            {vmMessage && (
+              <div class="settings-hint" style={{ marginTop: "4px" }}>{vmMessage}</div>
+            )}
+          </div>
 
           <label class="settings-field">
             <span class="settings-label">VM Backend</span>
@@ -499,6 +607,35 @@ export function SettingsPanel() {
           {calMessage && (
             <div class="settings-hint" style={{ marginTop: "4px" }}>{calMessage}</div>
           )}
+
+          {/* ── Data / migration section ── */}
+          <div class="settings-divider" />
+          <div class="settings-section-label">Data</div>
+
+          <div class="settings-field">
+            <span class="settings-hint">
+              All data lives in the sandbox VM (the unit of truth). Import seeds the
+              sandbox from this device's local <code>~/.todo</code>; Export rebuilds
+              <code>~/.todo</code> from the sandbox (a portable on-disk backup).
+            </span>
+            {migStats && (
+              <span class="settings-hint" style={{ marginTop: "6px" }}>
+                Local: {migStats.local.todos} todos, {migStats.local.lists} lists, {migStats.local.books} books, {migStats.local.artifacts} artifacts
+                {" · "}Sandbox: {migStats.sandbox.todos} todos, {migStats.sandbox.lists} lists, {migStats.sandbox.books} books, {migStats.sandbox.artifacts} artifacts
+              </span>
+            )}
+            <div style={{ display: "flex", gap: "6px", alignItems: "center", marginTop: "8px" }}>
+              <button class="btn btn-sm btn-primary" onClick={handleMigrate} disabled={migBusy}>
+                {migBusy ? "Working…" : "Import local → sandbox"}
+              </button>
+              <button class="btn btn-sm btn-secondary" onClick={handleExport} disabled={migBusy}>
+                {migBusy ? "Working…" : "Export sandbox → ~/.todo"}
+              </button>
+            </div>
+            {migMessage && (
+              <div class="settings-hint" style={{ marginTop: "4px" }}>{migMessage}</div>
+            )}
+          </div>
         </div>
 
         <div class="settings-footer">

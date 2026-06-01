@@ -1,7 +1,7 @@
 import { ThemeProvider, themeList, setTheme } from "./theme/ThemeProvider";
 import { useTheme } from "./theme/ThemeProvider";
-import { useRef, useCallback, useEffect } from "preact/hooks";
-import { activeTab, agentStatus, agentMode, settingsOpen, agentName, statusPopoverOpen, days, allArtifacts, allLists, allBooks } from "./state/store";
+import { useRef, useCallback, useEffect, useState } from "preact/hooks";
+import { activeTab, agentStatus, agentMode, settingsOpen, agentName, statusPopoverOpen, setupProgress, days, allArtifacts, allLists, allBooks } from "./state/store";
 import { WeekAccordion } from "./components/days/DayAccordion";
 import { MonthAccordion } from "./components/days/MonthAccordion";
 import { DayPanel } from "./components/days/DayPanel";
@@ -13,7 +13,7 @@ import { ChatWindow } from "./components/chat/ChatWindow";
 import { SettingsPanel } from "./components/settings/SettingsPanel";
 import { StatusPopover } from "./components/status/StatusPopover";
 import { setupEventListeners } from "./api/events";
-import { getAgentStatus, getAgentConfig, setAgentConfig, getDaysRange, listAllArtifacts, listLists, listBooks } from "./api/commands";
+import { getAgentStatus, getAgentConfig, setAgentConfig, getDaysRange, listAllArtifacts, listLists, listBooks, setupAgent } from "./api/commands";
 import type { ViewTab, AgentStatus } from "./types";
 import { signal } from "@preact/signals";
 
@@ -29,6 +29,53 @@ const tabs: { id: ViewTab; label: string }[] = [
 
 // Content area height in pixels (null = use flex default)
 const contentHeight = signal<number | null>(null);
+
+/** Shown over the data tabs until the sandbox agent (the data backend) is up. */
+function BootGate() {
+  const status = agentStatus.value;
+  const progress = setupProgress.value;
+  const [retrying, setRetrying] = useState(false);
+
+  async function retry() {
+    setRetrying(true);
+    try {
+      await setupAgent();
+    } catch {
+      /* status events drive the UI; errors surface via agent-status */
+    } finally {
+      setRetrying(false);
+    }
+  }
+
+  return (
+    <div class="boot-gate">
+      <div class="boot-gate-inner">
+        {status === "error" ? (
+          <>
+            <div class="boot-gate-title">Couldn't start the sandbox</div>
+            <div class="boot-gate-msg">{progress || "The data agent failed to start."}</div>
+            <div class="boot-gate-actions">
+              <button class="btn btn-primary" disabled={retrying} onClick={retry}>
+                {retrying ? "Retrying…" : "Retry"}
+              </button>
+              <button class="btn btn-secondary" onClick={() => (settingsOpen.value = true)}>
+                Open Settings
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <div class="boot-gate-spinner" />
+            <div class="boot-gate-title">Starting the sandbox…</div>
+            <div class="boot-gate-msg">
+              {progress || "Bringing up your data agent. First launch can take a minute."}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function AppShell() {
   const { theme } = useTheme();
@@ -181,15 +228,22 @@ function AppShell() {
         ))}
       </div>
 
-      {/* Scrollable content area */}
+      {/* Scrollable content area — gated on the sandbox being up, since it's the
+          single source of truth for all data. */}
       <div class="content-area" style={contentStyle}>
-        {activeTab.value === "day" && <DayPanel />}
-        {activeTab.value === "week" && <WeekAccordion />}
-        {activeTab.value === "month" && <MonthAccordion />}
-        {activeTab.value === "backlog" && <BacklogPanel />}
-        {activeTab.value === "lists" && <ListsPanel />}
-        {activeTab.value === "books" && <BooksPanel />}
-        {activeTab.value === "artifacts" && <ArtifactsPanel />}
+        {agentStatus.value === "running" ? (
+          <>
+            {activeTab.value === "day" && <DayPanel />}
+            {activeTab.value === "week" && <WeekAccordion />}
+            {activeTab.value === "month" && <MonthAccordion />}
+            {activeTab.value === "backlog" && <BacklogPanel />}
+            {activeTab.value === "lists" && <ListsPanel />}
+            {activeTab.value === "books" && <BooksPanel />}
+            {activeTab.value === "artifacts" && <ArtifactsPanel />}
+          </>
+        ) : (
+          <BootGate />
+        )}
       </div>
 
       {/* Resize handle */}

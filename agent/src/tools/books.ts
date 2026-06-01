@@ -3,9 +3,9 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
 import type { TodoRef } from "./lists.js";
+import { STORAGE_DIR } from "./paths.js";
 
-const STORAGE_ROOT = path.join("/data", "storage");
-const BOOKS_ROOT = path.join(STORAGE_ROOT, "books");
+const BOOKS_ROOT = path.join(STORAGE_DIR, "books");
 const BOOKS_INDEX = path.join(BOOKS_ROOT, "index.json");
 
 export interface BookPage {

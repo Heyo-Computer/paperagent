@@ -41,6 +41,9 @@ pub struct ListItem {
     pub values: Map<String, Value>,
     #[serde(default)]
     pub linked_todos: Vec<TodoRef>,
+    /// Soft-hide flag. Archived items are kept but hidden from the default view.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default)]
     pub created_at: String,
     #[serde(default)]

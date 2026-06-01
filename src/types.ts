@@ -48,6 +48,7 @@ export interface ListItem {
   id: string;
   values: Record<string, unknown>;
   linked_todos: TodoRef[];
+  archived: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -153,6 +154,26 @@ export type ViewTab = "day" | "week" | "month" | "backlog" | "lists" | "books" |
 export type AgentStatus = "disconnected" | "starting" | "running" | "error";
 
 export type AgentMode = "local" | "deployed" | "remote";
+
+export interface VmInfo {
+  name: string;
+  status: string;
+  backend: string;
+}
+
+export interface MigrationCounts {
+  days: number;
+  todos: number;
+  backlog: number;
+  lists: number;
+  books: number;
+  artifacts: number;
+}
+
+export interface MigrationStatsResult {
+  local: MigrationCounts;
+  sandbox: MigrationCounts;
+}
 
 export interface DeploymentInfo {
   mode: AgentMode;
