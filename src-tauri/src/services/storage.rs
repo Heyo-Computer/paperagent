@@ -1,3 +1,12 @@
+//! Local-filesystem storage implementation.
+//!
+//! The sandbox agent (agent/src/tools/*) is now the single source of truth for
+//! data, so most of this module is no longer wired into commands. It is retained
+//! as a reference implementation and for `calendar.rs`'s event-cache write plus
+//! the `ItemFromTodo`/`PageFromTodo` link result types. Allow dead code rather
+//! than delete, so the local format stays documented in one place.
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 use crate::models::todo::{Backlog, DayEntry, TodoItem};
 use crate::models::list::{List, ListSummary};
@@ -99,11 +108,49 @@ pub fn update_todo(storage_root: &Path, date: &str, updated: TodoItem) -> Result
 }
 
 /// Save the cached calendar events to {data_dir}/calendar/events.json so the agent can read them.
+///
+/// Merges with any previously cached events (keyed by event id, falling back to
+/// start_time+summary) rather than overwriting. The fetch window slides forward over
+/// time, so a plain overwrite would silently drop every past event the moment it left
+/// the window — merging lets the cache accumulate history that search can index.
 pub fn save_calendar_events(data_dir: &Path, events: &[crate::services::calendar::CalendarEvent]) -> Result<(), String> {
+    use crate::services::calendar::CalendarEvent;
+    use std::collections::HashMap;
+
     let dir = data_dir.join("calendar");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Failed to create calendar dir: {}", e))?;
     let path = dir.join("events.json");
-    let content = serde_json::to_string_pretty(events).map_err(|e| e.to_string())?;
+
+    let key = |e: &CalendarEvent| -> String {
+        if e.id.is_empty() {
+            format!("{}|{}", e.start_time, e.summary)
+        } else {
+            e.id.clone()
+        }
+    };
+
+    let mut merged: Vec<CalendarEvent> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let mut index: HashMap<String, usize> =
+        merged.iter().enumerate().map(|(i, e)| (key(e), i)).collect();
+
+    for ev in events {
+        let k = key(ev);
+        match index.get(&k) {
+            // Freshly fetched copy wins (details may have changed).
+            Some(&i) => merged[i] = ev.clone(),
+            None => {
+                index.insert(k, merged.len());
+                merged.push(ev.clone());
+            }
+        }
+    }
+
+    merged.sort_by(|a, b| a.start_time.cmp(&b.start_time));
+
+    let content = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     std::fs::write(&path, content).map_err(|e| format!("Failed to write calendar cache: {}", e))
 }
 
@@ -492,6 +539,7 @@ pub fn add_list_item(
         id: uuid::Uuid::new_v4().to_string(),
         values,
         linked_todos: Vec::new(),
+        archived: false,
         created_at: now.clone(),
         updated_at: now,
     });
@@ -505,6 +553,7 @@ pub fn update_list_item(storage_root: &Path, list_id: &str, updated: ListItem) -
     let mut list = get_list(storage_root, list_id)?;
     if let Some(item) = list.items.iter_mut().find(|i| i.id == updated.id) {
         item.values = updated.values;
+        item.archived = updated.archived;
         item.updated_at = chrono::Local::now().to_rfc3339();
     }
     list.updated_at = chrono::Local::now().to_rfc3339();

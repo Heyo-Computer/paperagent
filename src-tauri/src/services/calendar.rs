@@ -337,7 +337,7 @@ pub async fn fetch_events_range(
     let time_max = format!("{}T23:59:59Z", end_date);
 
     let url = format!(
-        "{}/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=250",
+        "{}/calendars/{}/events?timeMin={}&timeMax={}&singleEvents=true&orderBy=startTime&maxResults=2500",
         CALENDAR_API,
         urlencoding(cal_id),
         urlencoding(&time_min),

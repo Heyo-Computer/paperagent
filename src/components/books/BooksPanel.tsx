@@ -1,4 +1,4 @@
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import {
   listBooks,
   loadBook,
@@ -12,8 +12,12 @@ import {
   deletePage,
 } from "../../api/commands";
 import { allBooks, pendingBookSelection, navigateToTodo } from "../../state/store";
-import { MarkdownRenderer } from "../markdown/MarkdownRenderer";
+import { getPref, setPref } from "../../state/uiPrefs";
+import { useResizable } from "../../hooks/useResizable";
+import { BlockNoteEditor, type BlockNoteHandle } from "./BlockNoteEditor";
 import type { Book, BookPage } from "../../types";
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi));
 
 export function BooksPanel() {
   const [summaries, setSummaries] = useState(allBooks.value);
@@ -27,10 +31,44 @@ export function BooksPanel() {
   // selected page + editor state
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [pageContent, setPageContent] = useState("");
-  const [draft, setDraft] = useState("");
-  const [editing, setEditing] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
+  const editorRef = useRef<BlockNoteHandle>(null);
+
+  // layout: panel widths + collapse (persisted per-device)
+  const [railWidth, setRailWidth] = useState(() => getPref("books.railWidth", 180));
+  const [tocWidth, setTocWidth] = useState(() => getPref("books.tocWidth", 220));
+  const [railCollapsed, setRailCollapsed] = useState(() => getPref("books.railCollapsed", false));
+  const [tocCollapsed, setTocCollapsed] = useState(() => getPref("books.tocCollapsed", false));
+
+  const onRailResize = useResizable((dx) =>
+    setRailWidth((w) => {
+      const n = clamp(w + dx, 140, 400);
+      setPref("books.railWidth", n);
+      return n;
+    }),
+  );
+  const onTocResize = useResizable((dx) =>
+    setTocWidth((w) => {
+      const n = clamp(w + dx, 160, 460);
+      setPref("books.tocWidth", n);
+      return n;
+    }),
+  );
+
+  function toggleRail() {
+    setRailCollapsed((v) => {
+      setPref("books.railCollapsed", !v);
+      return !v;
+    });
+  }
+  function toggleToc() {
+    setTocCollapsed((v) => {
+      setPref("books.tocCollapsed", !v);
+      return !v;
+    });
+  }
 
   async function reloadSummaries() {
     try {
@@ -77,7 +115,6 @@ export function BooksPanel() {
     setSelectedBookId(id);
     setSelectedPageId(null);
     setPageContent("");
-    setEditing(false);
     try {
       const b = await loadBook(id);
       setCurrent(b);
@@ -90,15 +127,13 @@ export function BooksPanel() {
 
   async function selectPage(book: Book, pageId: string) {
     setSelectedPageId(pageId);
-    setEditing(false);
     setRenaming(false);
+    setDirty(false);
     try {
       const content = await loadPage(book.id, pageId);
       setPageContent(content);
-      setDraft(content);
     } catch {
       setPageContent("");
-      setDraft("");
     }
   }
 
@@ -143,11 +178,12 @@ export function BooksPanel() {
   }
 
   async function handleSavePage() {
-    if (!current || !selectedPageId) return;
-    const book = await savePage(current.id, selectedPageId, draft);
+    if (!current || !selectedPageId || !editorRef.current) return;
+    const content = editorRef.current.getContent();
+    const book = await savePage(current.id, selectedPageId, content);
     setCurrent(book);
-    setPageContent(draft);
-    setEditing(false);
+    setPageContent(content);
+    setDirty(false);
   }
 
   async function submitRename(page: BookPage) {
@@ -166,7 +202,6 @@ export function BooksPanel() {
     if (selectedPageId === pageId) {
       setSelectedPageId(null);
       setPageContent("");
-      setEditing(false);
     }
   }
 
@@ -185,28 +220,38 @@ export function BooksPanel() {
 
   return (
     <div class="books-layout">
-      {/* Left rail — book picker */}
-      <div class="books-rail">
-        <div class="books-rail-header">
-          <span>Books</span>
-          <button class="btn btn-sm btn-primary" onClick={startCreate}>+ New</button>
-        </div>
-        <div class="books-rail-items">
-          {summaries.length === 0 ? (
-            <div class="accordion-empty">No books yet</div>
-          ) : (
-            summaries.map((s) => (
-              <button
-                key={s.id}
-                class={`books-rail-item ${selectedBookId === s.id ? "active" : ""}`}
-                onClick={() => selectBook(s.id)}
-              >
-                {s.name}
-              </button>
-            ))
-          )}
-        </div>
-      </div>
+      {/* Left rail — book picker (collapsible / resizable) */}
+      {railCollapsed ? (
+        <button class="rail-expand-btn" onClick={toggleRail} title="Show books">›</button>
+      ) : (
+        <>
+          <div class="books-rail" style={{ width: `${railWidth}px` }}>
+            <div class="books-rail-header">
+              <span>Books</span>
+              <div class="books-rail-header-actions">
+                <button class="btn btn-sm btn-primary" onClick={startCreate}>+ New</button>
+                <button class="btn btn-sm btn-ghost" onClick={toggleRail} title="Collapse">‹</button>
+              </div>
+            </div>
+            <div class="books-rail-items">
+              {summaries.length === 0 ? (
+                <div class="accordion-empty">No books yet</div>
+              ) : (
+                summaries.map((s) => (
+                  <button
+                    key={s.id}
+                    class={`books-rail-item ${selectedBookId === s.id ? "active" : ""}`}
+                    onClick={() => selectBook(s.id)}
+                  >
+                    {s.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+          <div class="books-resize-handle" onMouseDown={onRailResize} />
+        </>
+      )}
 
       {creating ? (
         <div class="books-main">
@@ -228,53 +273,63 @@ export function BooksPanel() {
         </div>
       ) : current ? (
         <>
-          {/* TOC sidebar */}
-          <div class="books-toc">
-            <div class="books-toc-header">
-              <span class="books-toc-title">{current.name}</span>
-              <button class="btn btn-sm btn-danger" onClick={handleDeleteBook} title="Delete book">✕</button>
-            </div>
-            <div class="books-toc-pages">
-              {current.pages.length === 0 ? (
-                <div class="accordion-empty">No pages</div>
-              ) : (
-                current.pages.map((p, i) => (
-                  <div key={p.id} class={`books-toc-page ${selectedPageId === p.id ? "active" : ""}`}>
-                    <button
-                      class="books-toc-page-title"
-                      onClick={() => selectPage(current, p.id)}
-                    >
-                      {p.title}
-                    </button>
-                    <div class="books-toc-page-actions">
-                      <button class="btn btn-sm btn-ghost" disabled={i === 0} onClick={() => movePage(p.id, -1)} title="Move up">↑</button>
-                      <button class="btn btn-sm btn-ghost" disabled={i === current.pages.length - 1} onClick={() => movePage(p.id, 1)} title="Move down">↓</button>
-                      <button class="btn btn-sm btn-ghost" onClick={() => handleDeletePage(p.id)} title="Delete page">✕</button>
+          {/* TOC sidebar (collapsible / resizable) */}
+          {tocCollapsed ? (
+            <button class="rail-expand-btn" onClick={toggleToc} title="Show pages">›</button>
+          ) : (
+            <>
+              <div class="books-toc" style={{ width: `${tocWidth}px` }}>
+                <div class="books-toc-header">
+                  <span class="books-toc-title">{current.name}</span>
+                  <div class="books-rail-header-actions">
+                    <button class="btn btn-sm btn-ghost" onClick={toggleToc} title="Collapse">‹</button>
+                    <button class="btn btn-sm btn-danger" onClick={handleDeleteBook} title="Delete book">✕</button>
+                  </div>
+                </div>
+                <div class="books-toc-pages">
+                  {current.pages.length === 0 ? (
+                    <div class="accordion-empty">No pages</div>
+                  ) : (
+                    current.pages.map((p, i) => (
+                      <div key={p.id} class={`books-toc-page ${selectedPageId === p.id ? "active" : ""}`}>
+                        <button
+                          class="books-toc-page-title"
+                          onClick={() => selectPage(current, p.id)}
+                        >
+                          {p.title}
+                        </button>
+                        <div class="books-toc-page-actions">
+                          <button class="btn btn-sm btn-ghost" disabled={i === 0} onClick={() => movePage(p.id, -1)} title="Move up">↑</button>
+                          <button class="btn btn-sm btn-ghost" disabled={i === current.pages.length - 1} onClick={() => movePage(p.id, 1)} title="Move down">↓</button>
+                          <button class="btn btn-sm btn-ghost" onClick={() => handleDeletePage(p.id)} title="Delete page">✕</button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {addingPage ? (
+                  <div class="books-add-page">
+                    <input
+                      class="settings-input"
+                      type="text"
+                      placeholder="Page title"
+                      value={newPageTitle}
+                      onInput={(e) => setNewPageTitle(e.currentTarget.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") submitAddPage(); }}
+                      autofocus
+                    />
+                    <div class="books-add-page-actions">
+                      <button class="btn btn-sm btn-secondary" onClick={() => { setAddingPage(false); setNewPageTitle(""); }}>Cancel</button>
+                      <button class="btn btn-sm btn-primary" onClick={submitAddPage}>Add</button>
                     </div>
                   </div>
-                ))
-              )}
-            </div>
-            {addingPage ? (
-              <div class="books-add-page">
-                <input
-                  class="settings-input"
-                  type="text"
-                  placeholder="Page title"
-                  value={newPageTitle}
-                  onInput={(e) => setNewPageTitle(e.currentTarget.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") submitAddPage(); }}
-                  autofocus
-                />
-                <div class="books-add-page-actions">
-                  <button class="btn btn-sm btn-secondary" onClick={() => { setAddingPage(false); setNewPageTitle(""); }}>Cancel</button>
-                  <button class="btn btn-sm btn-primary" onClick={submitAddPage}>Add</button>
-                </div>
+                ) : (
+                  <button class="btn btn-sm btn-secondary books-add-page-btn" onClick={() => setAddingPage(true)}>+ Page</button>
+                )}
               </div>
-            ) : (
-              <button class="btn btn-sm btn-secondary books-add-page-btn" onClick={() => setAddingPage(true)}>+ Page</button>
-            )}
-          </div>
+              <div class="books-resize-handle" onMouseDown={onTocResize} />
+            </>
+          )}
 
           {/* Page editor */}
           <div class="books-page-main">
@@ -300,9 +355,14 @@ export function BooksPanel() {
                       {selectedPage.title}
                     </h3>
                   )}
-                  {!editing && (
-                    <button class="btn btn-sm btn-secondary" onClick={() => { setDraft(pageContent); setEditing(true); }}>Edit</button>
-                  )}
+                  <button
+                    class="btn btn-sm btn-primary"
+                    onClick={handleSavePage}
+                    disabled={!dirty}
+                    title={dirty ? "Save page" : "No changes"}
+                  >
+                    {dirty ? "Save" : "Saved"}
+                  </button>
                 </div>
                 {selectedPage.linked_todos.length > 0 && (
                   <div class="panel-linked-todos">
@@ -319,28 +379,14 @@ export function BooksPanel() {
                     ))}
                   </div>
                 )}
-                {editing ? (
-                  <>
-                    <textarea
-                      class="books-page-editor"
-                      value={draft}
-                      onInput={(e) => setDraft(e.currentTarget.value)}
-                      placeholder="Write markdown..."
-                    />
-                    <div class="books-page-actions">
-                      <button class="btn btn-sm btn-secondary" onClick={() => { setDraft(pageContent); setEditing(false); }}>Cancel</button>
-                      <button class="btn btn-sm btn-primary" onClick={handleSavePage}>Save</button>
-                    </div>
-                  </>
-                ) : (
-                  <div class="books-page-content" onClick={() => { setDraft(pageContent); setEditing(true); }}>
-                    {pageContent ? (
-                      <MarkdownRenderer content={pageContent} />
-                    ) : (
-                      <div class="accordion-empty">Empty page — click to edit.</div>
-                    )}
-                  </div>
-                )}
+                <div class="books-page-content">
+                  <BlockNoteEditor
+                    key={selectedPageId}
+                    ref={editorRef}
+                    content={pageContent}
+                    onChange={() => { if (!dirty) setDirty(true); }}
+                  />
+                </div>
               </>
             ) : (
               <div class="accordion-empty">Select a page, or add one to get started.</div>

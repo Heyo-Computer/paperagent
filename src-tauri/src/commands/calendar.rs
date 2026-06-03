@@ -1,8 +1,16 @@
 use tauri::{AppHandle, State, Manager, Emitter};
 use crate::services::calendar as cal;
-use crate::services::storage;
+use crate::services::routing::{agent_rpc, agent_url, require_agent};
+use crate::models::todo::DayEntry;
 use crate::state::AppState;
 use crate::logging;
+
+/// How many days of past events to pull into the searchable cache. The window
+/// slides forward each sync, and `storage::save_calendar_events` merges rather than
+/// overwrites, so the cache keeps accumulating history beyond this bound over time.
+const PAST_LOOKBACK_DAYS: i64 = 90;
+/// How many days ahead to fetch (and sync onto the todo list).
+const FUTURE_DAYS: i64 = 30;
 
 #[tauri::command]
 pub fn get_calendar_config(state: State<AppState>) -> cal::CalendarConfig {
@@ -94,23 +102,34 @@ pub async fn sync_calendar_to_todos(
         }
     };
 
-    let events = cal::fetch_events_range(&tokens.access_token, &config.calendar_id, 0, 30).await?;
+    let events = cal::fetch_events_range(
+        &tokens.access_token,
+        &config.calendar_id,
+        -PAST_LOOKBACK_DAYS,
+        FUTURE_DAYS,
+    )
+    .await?;
 
-    // Cache events for the agent tool
-    if let Err(e) = storage::save_calendar_events(&state.data_dir, &events) {
-        logging::warn(&format!("calendar sync: failed to cache events: {}", e));
-    }
+    // Cache the full window (past + upcoming) in the sandbox so the agent's search
+    // can index past meetings. The cache lives in the VM (/data/calendar), so it's
+    // written through the agent rather than the host filesystem.
+    let url = require_agent(&state).await?;
+    let _: Result<serde_json::Value, String> =
+        agent_rpc(&url, "calendar/save_events", serde_json::json!({ "events": events })).await;
 
-    let added = sync_events_to_storage(&state.storage_root, &events);
+    // Only add upcoming events to the todo list — don't backfill past meetings as todos.
+    let upcoming = upcoming_events(&events);
+    let added = sync_events_to_storage(&url, &upcoming).await;
 
     let msg = format!("Synced {} events, added {} new todos.", events.len(), added);
     logging::info(&format!("calendar: {}", msg));
     Ok(msg)
 }
 
-/// Group events by date and add them as todos. Generates a spec for each event with a meeting URL.
+/// Group events by date and add them as todos through the agent. Generates a spec
+/// for each event with a meeting URL (the agent's save_spec marks has_spec).
 /// Returns the number of todos added.
-fn sync_events_to_storage(storage_root: &std::path::Path, events: &[cal::CalendarEvent]) -> usize {
+async fn sync_events_to_storage(url: &str, events: &[cal::CalendarEvent]) -> usize {
     use std::collections::HashMap;
 
     // Group events by date (YYYY-MM-DD)
@@ -123,7 +142,13 @@ fn sync_events_to_storage(storage_root: &std::path::Path, events: &[cal::Calenda
 
     let mut added_total = 0;
     for (date, day_events) in by_date {
-        let day = storage::load_day(storage_root, &date);
+        let day: DayEntry = match agent_rpc(url, "storage/load_day", serde_json::json!({ "date": date })).await {
+            Ok(d) => d,
+            Err(e) => {
+                logging::warn(&format!("calendar sync: failed to load {}: {}", date, e));
+                continue;
+            }
+        };
         let existing_titles: Vec<String> = day.todos.iter().map(|t| t.title.clone()).collect();
 
         for event in day_events {
@@ -131,32 +156,42 @@ fn sync_events_to_storage(storage_root: &std::path::Path, events: &[cal::Calenda
             if existing_titles.contains(&title) {
                 continue;
             }
-            match storage::add_todo(storage_root, &date, &title) {
-                Ok(entry) => {
-                    added_total += 1;
-                    // If this event has a meeting URL, generate a spec for the new todo (last one in entry)
-                    if !event.meeting_url.is_empty() {
-                        if let Some(new_todo) = entry.todos.last() {
-                            let spec = render_event_spec(event);
-                            if let Err(e) = storage::save_spec(storage_root, &date, &new_todo.id, &spec) {
-                                logging::warn(&format!("calendar sync: failed to save spec for {}: {}", new_todo.id, e));
-                                continue;
-                            }
-                            // Mark has_spec=true on the todo
-                            let mut updated = new_todo.clone();
-                            updated.has_spec = true;
-                            let _ = storage::update_todo(storage_root, &date, updated);
-                        }
-                    }
-                }
+            let entry: DayEntry = match agent_rpc(url, "storage/add_todo", serde_json::json!({ "date": date, "title": title })).await {
+                Ok(e) => e,
                 Err(e) => {
                     logging::warn(&format!("calendar sync: failed to add todo for {}: {}", date, e));
+                    continue;
+                }
+            };
+            added_total += 1;
+            // If this event has a meeting URL, generate a spec for the new todo (last one in entry).
+            if !event.meeting_url.is_empty() {
+                if let Some(new_todo) = entry.todos.last() {
+                    let spec = render_event_spec(event);
+                    let _: Result<serde_json::Value, String> = agent_rpc(
+                        url,
+                        "storage/save_spec",
+                        serde_json::json!({ "date": date, "todo_id": new_todo.id, "content": spec }),
+                    )
+                    .await;
                 }
             }
         }
     }
 
     added_total
+}
+
+/// Filter a fetched window down to today-or-later events. Used to keep the past
+/// portion of the cache out of the todo list (we cache the past for search, but
+/// don't want to materialize old meetings as todos).
+fn upcoming_events(events: &[cal::CalendarEvent]) -> Vec<cal::CalendarEvent> {
+    let today = chrono::Local::now().date_naive().to_string();
+    events
+        .iter()
+        .filter(|e| event_date(e).map_or(false, |d| d >= today))
+        .cloned()
+        .collect()
 }
 
 /// Extract YYYY-MM-DD from a calendar event's start_time. Returns None if start_time is empty
@@ -234,14 +269,29 @@ pub async fn auto_sync_calendar(app: AppHandle) {
         }
     };
 
-    match cal::fetch_events_range(&access_token, &config.calendar_id, 0, 30).await {
+    match cal::fetch_events_range(
+        &access_token,
+        &config.calendar_id,
+        -PAST_LOOKBACK_DAYS,
+        FUTURE_DAYS,
+    )
+    .await
+    {
         Ok(events) => {
-            // Cache events for the agent tool
-            if let Err(e) = storage::save_calendar_events(&state.data_dir, &events) {
-                logging::warn(&format!("calendar auto-sync: failed to cache events: {}", e));
-            }
+            // Skip silently if the agent isn't up yet (auto-sync is best-effort).
+            let Some(url) = agent_url(&state) else {
+                logging::info("calendar auto-sync: agent not connected, skipping");
+                return;
+            };
 
-            let added = sync_events_to_storage(&state.storage_root, &events);
+            // Cache the full window (past + upcoming) in the sandbox so search can
+            // index past meetings.
+            let _: Result<serde_json::Value, String> =
+                agent_rpc(&url, "calendar/save_events", serde_json::json!({ "events": events })).await;
+
+            // Only add upcoming events as todos — don't backfill past meetings.
+            let upcoming = upcoming_events(&events);
+            let added = sync_events_to_storage(&url, &upcoming).await;
             if added > 0 {
                 logging::info(&format!("calendar auto-sync: added {} events as todos", added));
                 let _ = app.emit("calendar-synced", added);

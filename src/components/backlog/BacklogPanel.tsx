@@ -8,7 +8,7 @@ import {
   getDaysRange,
 } from "../../api/commands";
 import { AddTodo } from "../todos/AddTodo";
-import { days, todayString, updateDayTodos } from "../../state/store";
+import { days, todayString, updateDayTodos, pendingBacklogSelection } from "../../state/store";
 import type { Backlog, TodoItem as TodoItemType } from "../../types";
 
 function formatLong(date: string): string {
@@ -28,6 +28,7 @@ export function BacklogPanel() {
   const [loading, setLoading] = useState(false);
   const [movingId, setMovingId] = useState<string | null>(null);
   const [moveDate, setMoveDate] = useState<string>(todayString());
+  const [highlightId, setHighlightId] = useState<string | null>(null);
 
   async function reload() {
     setLoading(true);
@@ -43,12 +44,37 @@ export function BacklogPanel() {
 
   useEffect(() => { reload(); }, []);
 
+  // Honour a cross-tab navigation request (linked-todo / search chip click): highlight
+  // the target item; the row ref callback scrolls it into view once rendered.
+  useEffect(() => {
+    const sel = pendingBacklogSelection.value;
+    if (!sel) return;
+    pendingBacklogSelection.value = null;
+    setHighlightId(sel.todoId);
+  }, [pendingBacklogSelection.value]);
+
   async function handleAdd(title: string) {
     const b = await addBacklogItem(title);
     setBacklog(b);
   }
 
   async function handleToggle(item: TodoItemType) {
+    // Completing a backlog item moves it onto today's list (as done) and out of
+    // the backlog. Un-checking a (still-listed) item just toggles it in place.
+    if (!item.completed) {
+      const today = todayString();
+      await updateBacklogItem({ ...item, completed: true });
+      const result = await moveBacklogToDay(item.id, today);
+      setBacklog(result.backlog);
+      updateDayTodos(result.day.date, result.day.todos);
+      if (!days.value.some((d) => d.date === result.day.date)) {
+        try {
+          const entries = await getDaysRange();
+          days.value = entries;
+        } catch {}
+      }
+      return;
+    }
     const b = await updateBacklogItem({ ...item, completed: !item.completed });
     setBacklog(b);
   }
@@ -98,7 +124,15 @@ export function BacklogPanel() {
         ) : backlog.items.length > 0 ? (
           <div class="todo-list">
             {backlog.items.map((item) => (
-              <div key={item.id} class="todo-item">
+              <div
+                key={item.id}
+                class={`todo-item ${highlightId === item.id ? "lists-row-highlight" : ""}`}
+                ref={(el) => {
+                  if (el && highlightId === item.id) {
+                    el.scrollIntoView({ block: "center", behavior: "smooth" });
+                  }
+                }}
+              >
                 <div class="todo-item-row">
                   <button
                     class={`todo-checkbox ${item.completed ? "checked" : ""}`}

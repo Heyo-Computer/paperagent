@@ -25,6 +25,8 @@ export const isAgentLoading = signal<boolean>(false);
 
 // Agent
 export const agentStatus = signal<AgentStatus>("disconnected");
+// Latest provisioning/setup progress message (shown on the boot overlay).
+export const setupProgress = signal<string>("");
 export const agentMode = signal<AgentMode>("local");
 export const deployUrl = signal<string | null>(null);
 
@@ -48,6 +50,20 @@ export const pendingBookSelection = signal<{ bookId: string; pageId?: string } |
 // list item / book page). The Day tab reads and clears it after loading the day.
 export const pendingTodoSelection = signal<{ date: string; todoId: string } | null>(null);
 
+// Cross-tab navigation request toward an artifact (set by an artifact chip click in
+// chat). The Artifacts tab reads and clears it: cd to the folder, open the file modal.
+export const pendingArtifactSelection = signal<{ path: string } | null>(null);
+
+// Cross-tab navigation request toward a backlog (no-due-date) todo. The Backlog tab
+// reads and clears it: highlight + scroll the item into view.
+export const pendingBacklogSelection = signal<{ todoId: string } | null>(null);
+
+// Navigate to an artifact referenced from a chat chip (data-artifact-path).
+export function navigateToArtifact(path: string): void {
+  pendingArtifactSelection.value = { path };
+  activeTab.value = "artifacts";
+}
+
 // Navigate to the target of a todo->list/book link (chip click on a todo).
 export function navigateToLink(link: LinkRef): void {
   if (link.kind === "list") {
@@ -65,6 +81,7 @@ export function navigateToTodo(ref: TodoRef): void {
     pendingTodoSelection.value = { date: ref.date, todoId: ref.todo_id };
     activeTab.value = "day";
   } else {
+    pendingBacklogSelection.value = { todoId: ref.todo_id };
     activeTab.value = "backlog";
   }
 }
@@ -91,12 +108,14 @@ function formatDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-export function getDateRange(): string[] {
+// Rolling 8-day window ending tomorrow. `shiftDays` slides the whole window
+// (used by the Week view's prev/next navigation, which shifts by 7 days).
+export function getDateRange(shiftDays = 0): string[] {
   const dates: string[] = [];
   const now = new Date();
   for (let i = 6; i >= -1; i--) {
     const d = new Date(now);
-    d.setDate(d.getDate() - i);
+    d.setDate(d.getDate() - i + shiftDays);
     dates.push(formatDateString(d));
   }
   return dates;

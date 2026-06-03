@@ -69,10 +69,13 @@ pub struct AgentConfig {
 
 impl Default for AgentConfig {
     fn default() -> Self {
+        // KVM is the default on Linux: a microVM with its own persistent ext4 disk,
+        // so the sandbox is a self-contained unit of truth that travels via
+        // `heyvm sync`. (libvirt's live bind mount would keep data on the host.)
         let backend = if cfg!(target_os = "macos") {
             "apple_vf"
         } else {
-            "libvirt"
+            "kvm"
         };
 
         Self {

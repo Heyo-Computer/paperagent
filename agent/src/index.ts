@@ -49,6 +49,20 @@ import {
   createPageFromTodo,
   createListItemFromTodo,
 } from "./tools/links.js";
+import {
+  listArtifactsIn,
+  listAllArtifacts,
+  readArtifactFile,
+  saveArtifactFile,
+  deleteArtifactPath,
+  createArtifactFolder,
+  renameArtifactPath,
+  moveArtifactPath,
+  listArtifactFolders,
+} from "./tools/artifact.js";
+import { importBundle, migrationStats, exportBundle } from "./tools/migration.js";
+import type { MigrationBundle } from "./tools/migration.js";
+import { saveEvents } from "./tools/calendar.js";
 
 const app = express();
 const PORT = Number(process.env.PORT ?? 8080);
@@ -335,6 +349,79 @@ app.post("/rpc", async (req, res) => {
 
       case "links/create_list_item_from_todo": {
         res.json(makeResponse(request.id, createListItemFromTodo(p.date as string, p.todo_id as string, p.list_id as string)));
+        break;
+      }
+
+      // ── Artifacts RPCs ──
+
+      case "artifacts/list": {
+        res.json(makeResponse(request.id, listArtifactsIn((p.dir as string) ?? "")));
+        break;
+      }
+
+      case "artifacts/list_all": {
+        res.json(makeResponse(request.id, listAllArtifacts()));
+        break;
+      }
+
+      case "artifacts/read": {
+        res.json(makeResponse(request.id, readArtifactFile(p.path as string)));
+        break;
+      }
+
+      case "artifacts/save": {
+        res.json(makeResponse(request.id, saveArtifactFile(p.path as string, (p.content as string) ?? "")));
+        break;
+      }
+
+      case "artifacts/delete": {
+        deleteArtifactPath(p.path as string);
+        res.json(makeResponse(request.id, { ok: true }));
+        break;
+      }
+
+      case "artifacts/create_folder": {
+        res.json(makeResponse(request.id, createArtifactFolder(p.path as string)));
+        break;
+      }
+
+      case "artifacts/rename": {
+        res.json(makeResponse(request.id, renameArtifactPath(p.path as string, p.new_name as string)));
+        break;
+      }
+
+      case "artifacts/move": {
+        res.json(makeResponse(request.id, moveArtifactPath(p.path as string, (p.target_dir as string) ?? "")));
+        break;
+      }
+
+      case "artifacts/list_folders": {
+        res.json(makeResponse(request.id, listArtifactFolders()));
+        break;
+      }
+
+      // ── Migration RPCs ──
+
+      case "migration/import_bundle": {
+        res.json(makeResponse(request.id, importBundle(p.bundle as MigrationBundle)));
+        break;
+      }
+
+      case "migration/stats": {
+        res.json(makeResponse(request.id, migrationStats()));
+        break;
+      }
+
+      case "migration/export_bundle": {
+        res.json(makeResponse(request.id, exportBundle()));
+        break;
+      }
+
+      // ── Calendar cache (host fetches via OAuth, agent owns the cache file) ──
+
+      case "calendar/save_events": {
+        const events = (p.events as Parameters<typeof saveEvents>[0]) ?? [];
+        res.json(makeResponse(request.id, saveEvents(events)));
         break;
       }
 
