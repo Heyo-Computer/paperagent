@@ -1,0 +1,164 @@
+# Apple Virtualization (apple_virt) rootfs for the todo-agent VM.
+#
+# Built via:
+#   heyvm images build --backend apple_virt --from default \
+#       -f Dockerfile.apple_virt -n todo-agent --size-mb 12288
+#
+# Unlike Dockerfile.firecracker (a hand-rolled /init.sh PID 1 that reads a
+# static `ip=` kernel cmdline — firecracker's networking model), apple_virt
+# boots its own donor kernel via GRUB EFI and expects a *real* init that:
+#   1. spawns a root shell on /dev/hvc0 early in boot — mvm-ctrl's serial
+#      marker protocol uses it to push the heyvm SSH key and probe the guest
+#      IP. No hvc0 shell ⇒ "Serial shell not ready on hvc0".
+#   2. runs a DHCP client on the NIC — Apple's vmnet NAT only leases over
+#      DHCP. No DHCP ⇒ "no DHCP signal" ⇒ guest_ip=None ⇒ every `heyvm exec`
+#      fails with "reattach handle … has no guest IP".
+#   3. runs sshd for the large-payload push path (scp via ssh-proxy).
+#
+# This file mirrors heyo's proven apple_virt Ubuntu base image
+# (mvm-ctrl/install/apple-virt-ubuntu-24.04 + …-node) collapsed into one
+# self-contained build (no dependency on a pre-materialized local docker tag),
+# then layers NodeSource Node 22 on top. The agent code itself is NOT baked in
+# — it arrives via the /data mount and `npm install` at setup time.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Core packages: kernel + initramfs builder (for GRUB EFI boot), systemd as
+# init, sshd, networkd deps, dev basics.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        linux-image-generic \
+        initramfs-tools \
+        systemd-sysv \
+        systemd-resolved \
+        openssh-server \
+        ca-certificates \
+        netbase \
+        iproute2 \
+        iputils-ping \
+        sudo \
+        curl \
+        wget \
+        gnupg \
+        less \
+        nano \
+        git \
+        build-essential \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+# SSH: root login + password auth + TCP forwarding (parity with heyo base).
+RUN ssh-keygen -A \
+    && sed -i 's/#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config \
+    && sed -i 's/#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \
+    && sed -i '/^[# ]*AllowTcpForwarding/d' /etc/ssh/sshd_config \
+    && echo 'AllowTcpForwarding yes' >> /etc/ssh/sshd_config \
+    && echo 'root:heyo' | chpasswd \
+    && mkdir -p /etc/systemd/system/basic.target.wants \
+    && ln -sf /lib/systemd/system/ssh.service \
+        /etc/systemd/system/basic.target.wants/ssh.service
+
+# DHCP on the first ethernet NIC via systemd-networkd, started in sysinit so
+# apple_virt's post-boot probe sees a leased address early. Match both legacy
+# eth* and predictable en* names. systemd-resolved owns /etc/resolv.conf at
+# runtime — Docker bind-mounts it during build (can't ln -sf here, EBUSY), so
+# a tmpfiles.d rule installs the stub symlink on every boot.
+RUN mkdir -p /etc/systemd/network \
+    && printf '[Match]\nType=ether\nName=en* eth*\n\n[Network]\nDHCP=yes\n' \
+        > /etc/systemd/network/20-primary.network \
+    && mkdir -p /etc/systemd/system/sysinit.target.wants /etc/systemd/system/basic.target.wants /etc/systemd/system/sockets.target.wants \
+    && ln -sf /lib/systemd/system/systemd-networkd.service \
+        /etc/systemd/system/sysinit.target.wants/systemd-networkd.service \
+    && ln -sf /lib/systemd/system/systemd-networkd.socket \
+        /etc/systemd/system/sockets.target.wants/systemd-networkd.socket \
+    && ln -sf /lib/systemd/system/systemd-resolved.service \
+        /etc/systemd/system/basic.target.wants/systemd-resolved.service \
+    && mkdir -p /etc/tmpfiles.d \
+    && printf 'L+ /etc/resolv.conf - - - - /run/systemd/resolve/stub-resolv.conf\n' \
+        > /etc/tmpfiles.d/heyvm-resolv.conf
+
+# kernel.unprivileged_userns_clone: parity with heyo base (Chromium/sandbox
+# tooling on kernels >= 6.2).
+RUN mkdir -p /etc/sysctl.d \
+    && printf 'kernel.unprivileged_userns_clone=1\n' \
+        > /etc/sysctl.d/99-userns.conf
+
+# Root shell on /dev/hvc0 for mvm-ctrl's serial marker protocol (key push +
+# guest-IP probe + recovery). Stock serial-getty@hvc0.service only spawns
+# ~10–15s into boot — later than the host's provision/probe budgets — so we
+# mask it and run our own agetty-backed shell behind a tty-normalizing wrapper,
+# wanted by sysinit.target so it comes up as early as possible.
+RUN mkdir -p /etc/systemd/system /etc/systemd/system/sysinit.target.wants \
+    && ln -sf /dev/null /etc/systemd/system/serial-getty@hvc0.service \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'stty sane opost onlcr icrnl echo 2>/dev/null || true' \
+        'export HOME=/root USER=root SHELL=/bin/sh TERM=linux PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+        'cd /root 2>/dev/null || true' \
+        'exec /bin/sh -i' \
+        > /usr/local/bin/heyvm-hvc0-shell \
+    && chmod +x /usr/local/bin/heyvm-hvc0-shell \
+    && printf '%s\n' \
+        '[Unit]' \
+        'Description=heyvm root shell on /dev/hvc0' \
+        'DefaultDependencies=no' \
+        'After=dev-hvc0.device systemd-remount-fs.service local-fs.target' \
+        'Wants=dev-hvc0.device' \
+        'Before=sysinit.target shutdown.target' \
+        'Conflicts=serial-getty@hvc0.service shutdown.target' \
+        '' \
+        '[Service]' \
+        'Type=simple' \
+        'ExecStart=-/sbin/agetty --skip-login --login-program /usr/local/bin/heyvm-hvc0-shell --noissue --noclear --nonewline -L 115200 hvc0 vt220' \
+        'TTYReset=yes' \
+        'TTYVHangup=yes' \
+        'KillMode=process' \
+        'IgnoreSIGPIPE=no' \
+        'SendSIGHUP=yes' \
+        'Restart=always' \
+        'RestartSec=1' \
+        'StartLimitIntervalSec=0' \
+        '' \
+        '[Install]' \
+        'WantedBy=sysinit.target' \
+        > /etc/systemd/system/heyvm-hvc0-shell.service \
+    && ln -sf /etc/systemd/system/heyvm-hvc0-shell.service \
+        /etc/systemd/system/sysinit.target.wants/heyvm-hvc0-shell.service
+
+# Persistent journal so an apple_virt guest can be debugged post-shutdown by
+# loop-mounting its rootfs.
+RUN mkdir -p /var/log/journal /etc/systemd/journald.conf.d \
+    && printf '[Journal]\nStorage=persistent\nSystemMaxUse=64M\n' \
+        > /etc/systemd/journald.conf.d/heyvm-persistent.conf
+
+# Mount target for the host's ~/.todo:/data bind mount.
+RUN mkdir -p /data
+
+# NodeSource Node 22 LTS (bundles a current npm) — the agent runs on Node and
+# `npm install --omit=dev` runs against /data/agent at setup time.
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# CRITICAL: keep this LAST. The host writes a grub.cfg onto each per-sandbox
+# ESP that loads /boot/vmlinuz-lts + /boot/initramfs-lts from the rootfs. On
+# arm64 Ubuntu ships /boot/vmlinuz-*-generic gzip-compressed; GRUB on the
+# apple_virt path needs the decompressed Image to hand off cleanly onto hvc0.
+# Any apt step above may have triggered update-initramfs, so re-stamp here.
+RUN set -e; \
+    VMLINUZ=$(ls /boot/vmlinuz-*-generic 2>/dev/null | head -1); \
+    INITRD=$(ls /boot/initrd.img-*-generic 2>/dev/null | head -1); \
+    if [ -z "$VMLINUZ" ] || [ -z "$INITRD" ]; then \
+      echo "Missing kernel/initrd: VMLINUZ=$VMLINUZ INITRD=$INITRD" >&2; \
+      exit 1; \
+    fi; \
+    if gzip -t "$VMLINUZ" 2>/dev/null; then \
+      gzip -dc "$VMLINUZ" > /boot/vmlinuz-lts; \
+    else \
+      cp -f "$VMLINUZ" /boot/vmlinuz-lts; \
+    fi; \
+    cp -f "$INITRD" /boot/initramfs-lts
+
+EXPOSE 22 8080

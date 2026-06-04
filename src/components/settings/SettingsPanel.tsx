@@ -21,7 +21,7 @@ const BACKENDS = [
   { value: "kvm", label: "KVM (Linux, recommended)" },
   { value: "firecracker", label: "Firecracker (Linux)" },
   { value: "libvirt", label: "Libvirt (Linux, live host mount)" },
-  { value: "apple_vf", label: "Apple VF (macOS)" },
+  { value: "apple_virt", label: "Apple VF (macOS)" },
   { value: "docker", label: "Docker" },
   { value: "bubblewrap", label: "Bubblewrap" },
 ];

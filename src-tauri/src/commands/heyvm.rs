@@ -23,7 +23,7 @@ fn vm_backend_from_config(state: &AppState) -> String {
             }
         }
     }
-    if cfg!(target_os = "macos") { "apple_vf" } else { "libvirt" }.to_string()
+    if cfg!(target_os = "macos") { "apple_virt" } else { "libvirt" }.to_string()
 }
 
 fn data_dir_from_config(state: &AppState) -> String {

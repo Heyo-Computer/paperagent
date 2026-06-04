@@ -1,8 +1,73 @@
 use std::process::Command;
+use std::sync::OnceLock;
 use crate::logging;
 
+/// Directories where `heyvm` (and the ssh/scp tools it relies on) commonly live but
+/// which a macOS GUI app does NOT inherit on PATH when launched from the Dock/Spotlight.
+/// A GUI-launched app only gets a minimal `/usr/bin:/bin:/usr/sbin:/sbin`, so installs
+/// under Homebrew, cargo, or `~/.local/bin` become invisible. We probe these explicitly
+/// and also prepend them to PATH for every spawned process.
+fn extra_bin_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        dirs.push(home.join(".cargo/bin"));
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join("bin"));
+    }
+    for p in ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"] {
+        dirs.push(std::path::PathBuf::from(p));
+    }
+    dirs
+}
+
+/// PATH augmented with the common install dirs above, so that spawned processes — and
+/// in particular `scp`'s `ProxyCommand=heyvm ssh-proxy …`, which resolves `heyvm`
+/// through the child's PATH — can find binaries even under a stripped GUI environment.
+fn augmented_path() -> String {
+    let mut parts: Vec<String> = extra_bin_dirs()
+        .into_iter()
+        .map(|d| d.to_string_lossy().to_string())
+        .collect();
+    if let Ok(existing) = std::env::var("PATH") {
+        for p in existing.split(':') {
+            if !p.is_empty() && !parts.iter().any(|e| e == p) {
+                parts.push(p.to_string());
+            }
+        }
+    }
+    parts.join(":")
+}
+
+/// Resolve the full path to the `heyvm` binary, probing common install locations first
+/// and then the augmented PATH. Falls back to the bare name `heyvm` (relying on PATH)
+/// if nothing is found. Cached for the lifetime of the process.
+pub fn heyvm_bin() -> &'static str {
+    static BIN: OnceLock<String> = OnceLock::new();
+    BIN.get_or_init(|| {
+        // Probe explicit install dirs first.
+        for dir in extra_bin_dirs() {
+            let candidate = dir.join("heyvm");
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+        // Then any directory on the augmented PATH.
+        for dir in augmented_path().split(':') {
+            if dir.is_empty() { continue; }
+            let candidate = std::path::Path::new(dir).join("heyvm");
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+        logging::error("[heyvm] binary not found in common locations or PATH; falling back to bare 'heyvm'");
+        "heyvm".to_string()
+    })
+}
+
 fn heyvm_cmd() -> Command {
-    Command::new("heyvm")
+    let mut cmd = Command::new(heyvm_bin());
+    cmd.env("PATH", augmented_path());
+    cmd
 }
 
 fn run(label: &str, cmd: &mut Command) -> Result<String, String> {
@@ -51,7 +116,7 @@ fn ssh_proxy_opts(vm_name: &str) -> Vec<String> {
         "-o".into(), "ConnectTimeout=20".into(),
         "-o".into(), "IdentitiesOnly=yes".into(),
         "-i".into(), ssh_key_path().to_string_lossy().to_string(),
-        "-o".into(), format!("ProxyCommand=heyvm ssh-proxy {}", vm_name),
+        "-o".into(), format!("ProxyCommand={} ssh-proxy {}", heyvm_bin(), vm_name),
     ]
 }
 
@@ -62,6 +127,7 @@ pub fn scp_into_sandbox(vm_name: &str, local: &std::path::Path, remote: &str) ->
     let mut last_err = String::new();
     for attempt in 1..=5 {
         let mut cmd = Command::new("scp");
+        cmd.env("PATH", augmented_path());
         cmd.args(ssh_proxy_opts(vm_name));
         cmd.arg(local).arg(&target);
         match run(&format!("scp(attempt {})", attempt), &mut cmd) {
@@ -122,6 +188,18 @@ pub struct CreateResult {
 /// Port spec for --open-port: (host_port, guest_port). Use (0, guest) for dynamic host port.
 pub type PortSpec = (u16, u16);
 
+/// Map UI/config backend names to the identifiers the `heyvm` CLI actually accepts.
+/// In particular the macOS native virtualization backend is `apple_virt`; earlier
+/// versions of this app stored/sent `apple_vf`, which heyvm does not recognize and
+/// silently falls back to its settings default (libvirt) for — failing on macOS.
+/// Normalizing here fixes both new configs and any `apple_vf` already saved on disk.
+pub fn normalize_backend(backend: &str) -> &str {
+    match backend {
+        "apple_vf" => "apple_virt",
+        other => other,
+    }
+}
+
 pub fn create_sandbox_with_backend(
     name: &str,
     backend: &str,
@@ -129,6 +207,7 @@ pub fn create_sandbox_with_backend(
     image: Option<&str>,
     open_ports: &[PortSpec],
 ) -> Result<CreateResult, String> {
+    let backend = normalize_backend(backend);
     logging::info(&format!("[heyvm] create_sandbox: name={}, backend={}, data_dir={}, image={:?}, open_ports={:?}",
         name, backend, data_dir, image, open_ports));
     let mut cmd = heyvm_cmd();
@@ -170,6 +249,37 @@ pub fn build_image(dockerfile: &std::path::Path, name: &str) -> Result<String, S
     run("mvm_build", &mut cmd)
 }
 
+/// Build an Apple Virtualization (apple_virt) rootfs image from a Dockerfile.
+/// Unlike firecracker (which goes through `heyvm mvm build`), apple_virt images
+/// are built via `heyvm images build --backend apple_virt` and land at
+/// `~/.heyo/images/apple_virt/<name>/`, usable via `heyvm create --image <name>`.
+///
+/// `--from default` supplies the donor `grubaa64.efi` (generic across distros)
+/// that the host places on each sandbox's ESP. The actual boot uses the kernel
+/// staged *inside* the rootfs at /boot/vmlinuz-lts (see Dockerfile.apple_virt's
+/// final RUN), not the donor's standalone kernel — so the `default` (Alpine)
+/// donor is fine and, unlike `ubuntu-24.04`, auto-downloads if absent.
+///
+/// `--size-mb 12288` matches heyo's Ubuntu+node base; APFS CoW clones make the
+/// nominal size ~free on disk until the guest actually writes.
+pub fn build_apple_virt_image(dockerfile: &std::path::Path, name: &str) -> Result<String, String> {
+    logging::info(&format!("[heyvm] build_apple_virt_image: dockerfile={}, name={}", dockerfile.display(), name));
+    let context = dockerfile.parent().map(|p| p.to_string_lossy().to_string());
+    let mut cmd = heyvm_cmd();
+    cmd.args([
+        "images", "build",
+        "--backend", "apple_virt",
+        "--from", "default",
+        "--size-mb", "12288",
+        "-f", &dockerfile.to_string_lossy(),
+    ]);
+    if let Some(ctx) = &context {
+        cmd.args(["--context", ctx]);
+    }
+    cmd.args(["-n", name]);
+    run("apple_virt_build", &mut cmd)
+}
+
 /// Run `heyvm get <name> --format json` and return the parsed object.
 fn get_sandbox_json(name: &str) -> Option<serde_json::Value> {
     let output = heyvm_cmd().args(["get", name, "--format", "json"]).output().ok()?;
@@ -201,6 +311,25 @@ pub fn kvm_guest_ip(name_or_id: &str) -> Option<String> {
         }
     }
     derive_kvm_guest_ip_from_tap(name_or_id)
+}
+
+/// Discover a sandbox's primary global IPv4 by asking the guest directly over
+/// `heyvm exec`.
+///
+/// This is the reliable path for the **apple_virt** backend: its vmnet DHCP
+/// address is host-routable (the host can hit `http://<guest_ip>:<port>`
+/// directly), but heyvm's `get` does not cache it (`guest_ip` stays None
+/// because the host-side DHCP probe runs before the lease lands), there is no
+/// `tap-kv-*` host device for `kvm_guest_ip`'s derivation path, and neither
+/// `--open-port` localhost NAT nor `heyvm port-forward` actually carry traffic.
+/// Since `exec` works (serial early in boot, SSH once the key is provisioned),
+/// the guest itself is the source of truth for its own address.
+pub fn guest_ip_via_exec(name: &str) -> Option<String> {
+    let cmd = "ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1 | head -1";
+    let out = exec_in_sandbox_json(name, &["sh", "-c", cmd], Some("10s")).ok()?;
+    let ip = out.stdout.trim();
+    // Sanity-check it parses as IPv4 before handing it back as a URL host.
+    ip.parse::<std::net::Ipv4Addr>().ok().map(|_| ip.to_string())
 }
 
 /// Fallback for older heyvm versions: parse `ip -j addr show tap-kv-<suffix>`
@@ -268,11 +397,59 @@ pub fn stop_sandbox(name: &str) -> Result<String, String> {
 
 // ── Exec ──
 
+/// How many times to (re)try an exec that fails with a transient SSH/transport
+/// error, and how long to wait between tries.
+const EXEC_RETRY_ATTEMPTS: u32 = 5;
+const EXEC_RETRY_DELAY_MS: u64 = 1500;
+
+/// True for errors that are an artifact of the guest's SSH not being ready yet
+/// rather than a real command failure. On apple_virt the first exec(s) after a
+/// VM start commonly hit "Permission denied" — heyvm routes exec over SSH once
+/// the guest IP is cached, but the heyvm key provisioning into the guest settles
+/// a beat later. These clear on their own within a second or two, so retrying
+/// rides past them. Note this can surface two ways: as a failed `heyvm` process
+/// (Err from run), or as a *successful* heyvm call whose JSON reports a non-zero
+/// `exit_code` with the SSH error on stderr (see exec_in_sandbox_json).
+fn is_transient_exec_err(msg: &str) -> bool {
+    let l = msg.to_lowercase();
+    [
+        "permission denied",
+        "connection refused",
+        "connection reset",
+        "connection closed",
+        "kex_exchange_identification",
+        "connection timed out",
+        "operation timed out",
+        "broken pipe",
+        "host key verification",
+        "no guest ip",
+        "no route to host",
+    ]
+    .iter()
+    .any(|p| l.contains(p))
+}
+
 pub fn exec_in_sandbox(name: &str, cmd: &[&str]) -> Result<String, String> {
     let mut args = vec!["exec", "--stdout-only", name, "--"];
     args.extend_from_slice(cmd);
     logging::info(&format!("[heyvm] exec: sandbox={}, cmd={:?}", name, cmd));
-    run("exec", heyvm_cmd().args(&args))
+
+    let mut last_err = String::new();
+    for attempt in 1..=EXEC_RETRY_ATTEMPTS {
+        match run("exec", heyvm_cmd().args(&args)) {
+            Ok(s) => return Ok(s),
+            Err(e) => {
+                if is_transient_exec_err(&e) && attempt < EXEC_RETRY_ATTEMPTS {
+                    logging::warn(&format!("[heyvm] exec: transient error (attempt {}/{}), retrying: {}", attempt, EXEC_RETRY_ATTEMPTS, e));
+                    std::thread::sleep(std::time::Duration::from_millis(EXEC_RETRY_DELAY_MS));
+                    last_err = e;
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    }
+    Err(last_err)
 }
 
 pub struct ExecOutput {
@@ -292,8 +469,6 @@ pub fn exec_in_sandbox_json(name: &str, cmd: &[&str], timeout: Option<&str>) -> 
     args.extend_from_slice(cmd);
     logging::info(&format!("[heyvm] exec_json: sandbox={}, cmd={:?}, timeout={:?}", name, cmd, timeout));
 
-    let raw = run("exec_json", heyvm_cmd().args(&args))?;
-
     #[derive(serde::Deserialize)]
     struct JsonOut {
         stdout: String,
@@ -301,8 +476,37 @@ pub fn exec_in_sandbox_json(name: &str, cmd: &[&str], timeout: Option<&str>) -> 
         exit_code: i32,
     }
 
-    let parsed: JsonOut = serde_json::from_str(raw.trim())
-        .map_err(|e| format!("exec_json: failed to parse output: {} (raw: {})", e, raw.trim()))?;
+    let mut last_err = String::new();
+    let parsed: JsonOut = 'retry: loop {
+        for attempt in 1..=EXEC_RETRY_ATTEMPTS {
+            match run("exec_json", heyvm_cmd().args(&args)) {
+                Ok(raw) => {
+                    let parsed: JsonOut = serde_json::from_str(raw.trim())
+                        .map_err(|e| format!("exec_json: failed to parse output: {} (raw: {})", e, raw.trim()))?;
+                    // A non-zero exit whose stderr is an SSH-not-ready artifact means
+                    // the command never actually ran — retry rather than report it as
+                    // a (silent) success to the caller.
+                    if parsed.exit_code != 0 && is_transient_exec_err(&parsed.stderr) && attempt < EXEC_RETRY_ATTEMPTS {
+                        logging::warn(&format!("[heyvm] exec_json: transient exit_code={} (attempt {}/{}), retrying: {}", parsed.exit_code, attempt, EXEC_RETRY_ATTEMPTS, parsed.stderr.trim()));
+                        std::thread::sleep(std::time::Duration::from_millis(EXEC_RETRY_DELAY_MS));
+                        last_err = parsed.stderr;
+                        continue;
+                    }
+                    break 'retry parsed;
+                }
+                Err(e) => {
+                    if is_transient_exec_err(&e) && attempt < EXEC_RETRY_ATTEMPTS {
+                        logging::warn(&format!("[heyvm] exec_json: transient error (attempt {}/{}), retrying: {}", attempt, EXEC_RETRY_ATTEMPTS, e));
+                        std::thread::sleep(std::time::Duration::from_millis(EXEC_RETRY_DELAY_MS));
+                        last_err = e;
+                        continue;
+                    }
+                    return Err(e);
+                }
+            }
+        }
+        return Err(last_err);
+    };
 
     if parsed.exit_code != 0 {
         logging::warn(&format!("[heyvm] exec_json: exit_code={}, stderr={}", parsed.exit_code, parsed.stderr.trim()));
@@ -375,14 +579,15 @@ pub struct CloudCreateOpts<'a> {
 }
 
 pub fn create_cloud_sandbox(opts: &CloudCreateOpts) -> Result<CreateResult, String> {
+    let backend = normalize_backend(opts.backend);
     logging::info(&format!("[heyvm] create_cloud_sandbox: name={}, backend={}, cloud_url={}",
-        opts.name, opts.backend, opts.cloud_url));
+        opts.name, backend, opts.cloud_url));
     let mut cmd = heyvm_cmd();
     cmd.args([
         "create",
         "--format", "json",
         "--name", opts.name,
-        "--backend-type", opts.backend,
+        "--backend-type", backend,
         "--cloud-url", opts.cloud_url,
     ]);
     if let Some(img) = opts.image {
