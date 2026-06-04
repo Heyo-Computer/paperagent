@@ -27,8 +27,21 @@ const tabs: { id: ViewTab; label: string }[] = [
   { id: "artifacts", label: "Artifacts" },
 ];
 
-// Content area height in pixels (null = use flex default)
-const contentHeight = signal<number | null>(null);
+// Chat panel height in pixels (null = use flex/CSS default). The content area
+// above it stays flex:1 and absorbs the slack, so dragging the divider resizes
+// the chat in place rather than shoving the whole stack up or down.
+const chatHeight = signal<number | null>(null);
+
+// Layout constants shared between the drag handler and the window-resize clamp.
+const HEADER_OFFSET = 72; // header (~38) + tabs (~34)
+const HANDLE_HEIGHT = 7;
+const MIN_CONTENT = 80;
+const MIN_CHAT = 200; // matches .chat-panel min-height in global.css
+
+// Largest chat height that still leaves room for the content area above it.
+function maxChatHeight(containerHeight: number): number {
+  return containerHeight - HEADER_OFFSET - HANDLE_HEIGHT - MIN_CONTENT;
+}
 
 /** Shown over the data tabs until the sandbox agent (the data backend) is up. */
 function BootGate() {
@@ -108,18 +121,14 @@ function AppShell() {
     };
     document.addEventListener("visibilitychange", handleVisibility);
 
-    // Keep a manually-dragged content height bounded when the window resizes.
-    // Without this, the fixed px height (flex: none) goes stale and the chat
-    // panel below it gets squished/clipped by .app-column's overflow: hidden.
+    // Keep a manually-dragged chat height bounded when the window resizes.
+    // Without this, the fixed px height goes stale and the content area above
+    // it gets squished/clipped by .app-column's overflow: hidden.
     const handleResize = () => {
-      if (contentHeight.value === null || !containerRef.current) return;
+      if (chatHeight.value === null || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const headerOffset = 72;
-      const minContent = 80;
-      const minChat = 150;
-      const available = rect.height - headerOffset;
-      const clamped = Math.max(minContent, Math.min(contentHeight.value, available - minChat));
-      if (clamped !== contentHeight.value) contentHeight.value = clamped;
+      const clamped = Math.max(MIN_CHAT, Math.min(chatHeight.value, maxChatHeight(rect.height)));
+      if (clamped !== chatHeight.value) chatHeight.value = clamped;
     };
     window.addEventListener("resize", handleResize);
 
@@ -145,15 +154,10 @@ function AppShell() {
     const onMouseMove = (e: MouseEvent) => {
       if (!dragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      // Offset from top of container to the mouse position
-      // Subtract header (~38) + tabs (~34) = ~72px
-      const headerOffset = 72;
-      const minContent = 80;
-      const minChat = 150;
-      const available = rect.height - headerOffset;
-      let newHeight = e.clientY - rect.top - headerOffset;
-      newHeight = Math.max(minContent, Math.min(newHeight, available - minChat));
-      contentHeight.value = newHeight;
+      // The chat fills from just below the divider to the bottom of the window.
+      let newHeight = rect.bottom - e.clientY - HANDLE_HEIGHT;
+      newHeight = Math.max(MIN_CHAT, Math.min(newHeight, maxChatHeight(rect.height)));
+      chatHeight.value = newHeight;
     };
 
     const onMouseUp = () => {
@@ -167,10 +171,6 @@ function AppShell() {
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
   }, []);
-
-  const contentStyle = contentHeight.value !== null
-    ? { height: `${contentHeight.value}px`, flex: "none" }
-    : undefined;
 
   return (
     <div class="app-column" ref={containerRef}>
@@ -230,7 +230,7 @@ function AppShell() {
 
       {/* Scrollable content area — gated on the sandbox being up, since it's the
           single source of truth for all data. */}
-      <div class="content-area" style={contentStyle}>
+      <div class="content-area">
         {agentStatus.value === "running" ? (
           <>
             {activeTab.value === "day" && <DayPanel />}
@@ -252,7 +252,7 @@ function AppShell() {
       </div>
 
       {/* Chat — always visible, anchored to bottom */}
-      <ChatWindow />
+      <ChatWindow heightPx={chatHeight.value} />
 
       {/* Overlays */}
       <SettingsPanel />

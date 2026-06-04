@@ -3,15 +3,21 @@ import { sendChatMessage } from "../../api/chat";
 import { MessageList } from "./MessageList";
 import { ChatInput } from "./ChatInput";
 
-export function ChatWindow() {
+export function ChatWindow({ heightPx }: { heightPx?: number | null }) {
   async function handleSend(text: string) {
     await sendChatMessage(text);
   }
 
   const status = agentStatus.value;
 
+  // When the user has dragged the divider, drive the panel off an explicit
+  // height and lift the default max-height cap so the drag can size it freely.
+  const style = heightPx != null
+    ? { height: `${heightPx}px`, maxHeight: "none" }
+    : undefined;
+
   return (
-    <div class="chat-panel">
+    <div class="chat-panel" style={style}>
       <div class="chat-panel-header">
         <span class="chat-panel-title">Chat</span>
         {status === "disconnected" && (
