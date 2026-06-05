@@ -8,12 +8,33 @@ use crate::logging;
 const AGENT_PORT: u16 = 8080;
 const AGENT_IMAGE_NAME: &str = "todo-agent";
 const AGENT_DOCKERFILE: &str = "Dockerfile.firecracker";
+/// apple_virt needs a real systemd init with an early hvc0 root shell + DHCP +
+/// sshd (Dockerfile.firecracker's hand-rolled /init.sh boots fine under
+/// firecracker but leaves apple_virt with a silent serial console and no DHCP
+/// lease → no guest IP → every `heyvm exec` fails). Built from the proven heyo
+/// apple_virt base recipe.
+const AGENT_APPLE_VIRT_DOCKERFILE: &str = "Dockerfile.apple_virt";
 
 /// Path the firecracker/kvm rootfs lives at when built.
 fn agent_image_path() -> std::path::PathBuf {
     let home = dirs::home_dir().expect("Could not determine home directory");
     home.join(".heyo/images/firecracker")
         .join(format!("{}.ext4", AGENT_IMAGE_NAME))
+}
+
+/// Directory the apple_virt rootfs lives in when built (`heyvm images build`
+/// drops the image under `~/.heyo/images/apple_virt/<name>/`).
+fn agent_apple_virt_image_dir() -> std::path::PathBuf {
+    let home = dirs::home_dir().expect("Could not determine home directory");
+    home.join(".heyo/images/apple_virt").join(AGENT_IMAGE_NAME)
+}
+
+/// True once the apple_virt agent image has been built (directory exists and is
+/// non-empty). Used to skip the multi-GB rebuild on subsequent runs.
+fn apple_virt_image_built() -> bool {
+    std::fs::read_dir(agent_apple_virt_image_dir())
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false)
 }
 
 /// Whether the named backend uses firecracker-style ext4 images at
@@ -41,7 +62,7 @@ pub async fn setup_agent(
     let config = read_config(&state);
     let vm_name = if config.vm_name.is_empty() { "todo-agent".to_string() } else { config.vm_name.clone() };
     let backend = if config.vm_backend.is_empty() {
-        if cfg!(target_os = "macos") { "apple_vf" } else { "libvirt" }.to_string()
+        if cfg!(target_os = "macos") { "apple_virt" } else { "libvirt" }.to_string()
     } else {
         config.vm_backend.clone()
     };
@@ -71,7 +92,7 @@ pub async fn setup_agent(
         let image_path = agent_image_path();
         if !image_path.exists() {
             progress(&app, &format!("Building VM image '{}' (first run)...", AGENT_IMAGE_NAME));
-            let dockerfile = resolve_dockerfile(&app)?;
+            let dockerfile = resolve_dockerfile(&app, AGENT_DOCKERFILE)?;
             if let Err(e) = heyvm::build_image(&dockerfile, AGENT_IMAGE_NAME) {
                 let msg = format!("setup_agent: image build failed: {}", e);
                 logging::error(&msg);
@@ -82,8 +103,25 @@ pub async fn setup_agent(
             logging::info(&format!("setup_agent: image {} present at {}", AGENT_IMAGE_NAME, image_path.display()));
         }
         Some(AGENT_IMAGE_NAME.to_string())
+    } else if backend == "apple_virt" {
+        // apple_virt: build the same Dockerfile into an apple_virt rootfs via
+        // `heyvm images build` (mvm build is firecracker-only). Built once, then
+        // referenced by name like the firecracker path.
+        if !apple_virt_image_built() {
+            progress(&app, &format!("Building Apple VF image '{}' (first run, this can take a few minutes)...", AGENT_IMAGE_NAME));
+            let dockerfile = resolve_dockerfile(&app, AGENT_APPLE_VIRT_DOCKERFILE)?;
+            if let Err(e) = heyvm::build_apple_virt_image(&dockerfile, AGENT_IMAGE_NAME) {
+                let msg = format!("setup_agent: apple_virt image build failed: {}", e);
+                logging::error(&msg);
+                return Err(msg);
+            }
+            logging::info(&format!("setup_agent: built apple_virt image {} at {}", AGENT_IMAGE_NAME, agent_apple_virt_image_dir().display()));
+        } else {
+            logging::info(&format!("setup_agent: apple_virt image {} present at {}", AGENT_IMAGE_NAME, agent_apple_virt_image_dir().display()));
+        }
+        Some(AGENT_IMAGE_NAME.to_string())
     } else {
-        // libvirt / apple_vf: look for a qcow2 image at the standard location.
+        // libvirt: look for a qcow2 image at the standard location.
         // Prefer `<image>-base.qcow2` (heyvm libvirt convention) over `<image>.qcow2`.
         let home = dirs::home_dir().expect("Could not determine home directory");
         let candidates = [
@@ -120,13 +158,17 @@ pub async fn setup_agent(
     }
     logging::info("setup_agent: agent code staged for seed");
 
-    // Step 3: Create sandbox with agent port forwarded to host
+    // Step 3: Create sandbox. On apple_virt the agent is reached directly at the
+    // guest's host-routable vmnet IP, so --open-port does nothing there (it only
+    // triggers heyvm's no-op "Localnet DNAT" setup, which logs failures) — omit
+    // it. Other backends still NAT --open-port to the host, so keep it for them.
     progress(&app, "Checking sandbox...");
     if heyvm::sandbox_exists(&vm_name) {
         logging::info(&format!("setup_agent: sandbox '{}' already exists", vm_name));
     } else {
         progress(&app, &format!("Creating sandbox '{}'...", vm_name));
-        match heyvm::create_sandbox_with_backend(&vm_name, &backend, &data_dir, image_arg.as_deref(), &[(AGENT_PORT, AGENT_PORT)]) {
+        let open_ports: &[heyvm::PortSpec] = if backend == "apple_virt" { &[] } else { &[(AGENT_PORT, AGENT_PORT)] };
+        match heyvm::create_sandbox_with_backend(&vm_name, &backend, &data_dir, image_arg.as_deref(), open_ports) {
             Ok(result) => {
                 if let Some(mapping) = result.port_mappings.first() {
                     logging::info(&format!("setup_agent: sandbox created, port mapping: host:{} -> guest:{}",
@@ -445,7 +487,8 @@ fn start_agent_process(vm_name: &str, config: &crate::commands::config::AgentCon
     ));
 
     match heyvm::exec_in_sandbox_json(vm_name, &["sh", "-c", &start_cmd], Some("15s")) {
-        Ok(out) => logging::info(&format!("start_agent_process: kicked (exit {}): {}", out.exit_code, out.stdout.trim())),
+        Ok(out) if out.exit_code == 0 => logging::info(&format!("start_agent_process: kicked (exit 0): {}", out.stdout.trim())),
+        Ok(out) => logging::warn(&format!("start_agent_process: launch exec returned exit {} (agent likely did not start): {}", out.exit_code, out.stderr.trim())),
         Err(e) => logging::warn(&format!("start_agent_process: exec error (may be fine for background): {}", e)),
     }
 }
@@ -703,11 +746,15 @@ async fn wait_for_agent(
     Err(format!("Agent failed to respond within 30 seconds. Check ~/.todo/logs/todo.log and ~/.todo/logs/agent.log for details."))
 }
 
-/// After wait-for confirms the agent is running inside the sandbox,
-/// verify the host can reach it. Tries (in order):
-///   1. localhost:AGENT_PORT — works when --open-port actually NATted
-///   2. KVM/Firecracker guest tap IP — `--open-port` is a no-op for these backends
-///   3. `heyvm port-forward` — fallback for older libvirt sandboxes
+/// After wait-for confirms the agent is running inside the sandbox, verify the
+/// host can reach it. Tries (in order):
+///   1. localhost:AGENT_PORT — backends that NAT --open-port to the host
+///   2. the guest IP directly — KVM/Firecracker tap, or apple_virt's
+///      host-routable vmnet IP (discovered via exec). This is the intended
+///      apple_virt model: the agent binds 0.0.0.0 and the guest IP is reachable
+///      from the host with no tunnel.
+///   3. `heyvm port-forward` — fallback for setups where the guest IP isn't
+///      directly routable (older libvirt sandboxes)
 async fn establish_host_connection(
     vm_name: &str,
     state: &AppState,
@@ -715,15 +762,19 @@ async fn establish_host_connection(
     let local_url = agent_url();
 
     if svc::check_health(&local_url).await {
-        logging::info(&format!("establish_connection: direct localhost works at {}", local_url));
+        logging::info(&format!("establish_connection: localhost reachable at {}", local_url));
         return Ok(local_url);
     }
 
-    // For KVM/Firecracker, the agent is reachable on the tap device's guest IP.
-    if let Some(guest_ip) = heyvm::kvm_guest_ip(vm_name) {
+    // Find a reachable guest IP. KVM/Firecracker expose one via heyvm's `get`
+    // or a tap device; apple_virt's vmnet DHCP IP is host-routable but heyvm
+    // doesn't reliably surface it, so we ask the guest its own IP over exec.
+    // Either way the result is directly host-routable — connect to it.
+    let guest_ip = heyvm::kvm_guest_ip(vm_name).or_else(|| heyvm::guest_ip_via_exec(vm_name));
+    if let Some(guest_ip) = guest_ip {
         let guest_url = format!("http://{}:{}", guest_ip, AGENT_PORT);
         if svc::check_health(&guest_url).await {
-            logging::info(&format!("establish_connection: guest IP works at {}", guest_url));
+            logging::info(&format!("establish_connection: guest IP reachable at {}", guest_url));
             return Ok(guest_url);
         }
         logging::warn(&format!("establish_connection: guest IP {} unreachable, falling back", guest_url));
@@ -814,17 +865,18 @@ fn tail(s: &str, max_chars: usize) -> &str {
     }
 }
 
-/// Resolve the Firecracker/KVM Dockerfile path. Tries the bundled resource
-/// dir first, then `agent-bundle/`, then the dev `agent/` source tree.
-pub fn resolve_dockerfile(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+/// Resolve a Dockerfile path by filename (e.g. `Dockerfile.firecracker` or
+/// `Dockerfile.apple_virt`). Tries the bundled resource dir first, then
+/// `agent-bundle/`, then the dev `agent/` source tree.
+pub fn resolve_dockerfile(app: &AppHandle, dockerfile: &str) -> Result<std::path::PathBuf, String> {
     let mut candidates: Vec<std::path::PathBuf> = Vec::new();
     if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push(resource_dir.join("agent-bundle").join(AGENT_DOCKERFILE));
-        candidates.push(resource_dir.join(AGENT_DOCKERFILE));
+        candidates.push(resource_dir.join("agent-bundle").join(dockerfile));
+        candidates.push(resource_dir.join(dockerfile));
     }
     let dev_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../agent")
-        .join(AGENT_DOCKERFILE);
+        .join(dockerfile);
     candidates.push(dev_path);
 
     for path in &candidates {
@@ -836,7 +888,7 @@ pub fn resolve_dockerfile(app: &AppHandle) -> Result<std::path::PathBuf, String>
 
     Err(format!(
         "Dockerfile '{}' not found. Looked in: {}",
-        AGENT_DOCKERFILE,
+        dockerfile,
         candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
     ))
 }

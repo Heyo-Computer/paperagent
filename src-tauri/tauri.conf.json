@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build && rm -rf src-tauri/agent-bundle && mkdir -p src-tauri/agent-bundle && cp -r agent/dist agent/package.json agent/Dockerfile.firecracker src-tauri/agent-bundle/",
+    "beforeBuildCommand": "bun run build && rm -rf src-tauri/agent-bundle && mkdir -p src-tauri/agent-bundle && cp -r agent/dist agent/package.json agent/Dockerfile.firecracker agent/Dockerfile.apple_virt src-tauri/agent-bundle/",
     "frontendDist": "../dist"
   },
   "app": {

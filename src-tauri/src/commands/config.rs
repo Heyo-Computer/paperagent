@@ -73,7 +73,7 @@ impl Default for AgentConfig {
         // so the sandbox is a self-contained unit of truth that travels via
         // `heyvm sync`. (libvirt's live bind mount would keep data on the host.)
         let backend = if cfg!(target_os = "macos") {
-            "apple_vf"
+            "apple_virt"
         } else {
             "kvm"
         };
@@ -166,8 +166,10 @@ pub async fn get_status_info(state: State<'_, AppState>) -> Result<StatusInfo, S
     let data_path = std::path::Path::new(&config.data_dir);
     let data_dir_exists = data_path.exists();
 
-    // Check if heyvm is on PATH
-    let heyvm_available = std::process::Command::new("heyvm")
+    // Check if heyvm is available. Resolve it the same way the service layer does
+    // (probing common install dirs + augmented PATH) so a GUI-launched app on macOS,
+    // which inherits only a minimal PATH, still finds a Homebrew/cargo install.
+    let heyvm_available = std::process::Command::new(crate::services::heyvm::heyvm_bin())
         .arg("--help")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
