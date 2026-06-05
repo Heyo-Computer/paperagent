@@ -5,10 +5,11 @@ import {
   getCalendarStatus, syncCalendarToTodos,
   deployAgent, connectRemote, disconnectRemote, teardownDeploy,
   connectP2p, disconnectP2p, getDeploymentInfo,
+  connectNetwork, listNetworkServices,
   listSandboxes, getAgentConfig, setAgentConfig, updateAgent,
 } from "../../api/commands";
 import { listen } from "@tauri-apps/api/event";
-import type { StatusInfo, CalendarStatus, DeploymentInfo } from "../../types";
+import type { StatusInfo, CalendarStatus, DeploymentInfo, NetworkServiceInfo } from "../../types";
 
 function StatusDot({ status }: { status: string }) {
   const cls =
@@ -33,7 +34,8 @@ function ModeLabel({ mode }: { mode: string }) {
   const label =
     mode === "deployed" ? "Deployed" :
     mode === "remote" ? "Remote" :
-    mode === "p2p" ? "P2P" : "Local";
+    mode === "p2p" ? "P2P" :
+    mode === "network" ? "Network" : "Local";
   const cls = mode === "local" ? "disconnected" : "running";
   return (
     <div class="status-row">
@@ -64,6 +66,10 @@ export function StatusPopover() {
   const [connectingP2p, setConnectingP2p] = useState(false);
   const [showP2p, setShowP2p] = useState(false);
   const [deployInfo, setDeployInfo] = useState<DeploymentInfo | null>(null);
+  const [showNetwork, setShowNetwork] = useState(false);
+  const [networkServices, setNetworkServices] = useState<NetworkServiceInfo[]>([]);
+  const [loadingNetwork, setLoadingNetwork] = useState(false);
+  const [connectingNetwork, setConnectingNetwork] = useState("");
   const [copied, setCopied] = useState(false);
   const [existingSandboxes, setExistingSandboxes] = useState<string[]>([]);
   const [showSandboxPicker, setShowSandboxPicker] = useState(false);
@@ -348,6 +354,43 @@ export function StatusPopover() {
     }
   }
 
+  // ── Network connect handlers ──
+
+  async function handleToggleNetwork() {
+    const next = !showNetwork;
+    setShowNetwork(next);
+    if (next && networkServices.length === 0) {
+      setLoadingNetwork(true);
+      setActionMsg("");
+      try {
+        setNetworkServices(await listNetworkServices());
+      } catch (e) {
+        setActionMsg(`Couldn't list network services: ${e}`);
+      } finally {
+        setLoadingNetwork(false);
+      }
+    }
+  }
+
+  async function handleConnectNetwork(svc: NetworkServiceInfo) {
+    setConnectingNetwork(svc.address);
+    setActionMsg("");
+    agentStatus.value = "starting";
+    try {
+      const msg = await connectNetwork(svc.name, svc.port);
+      setActionMsg(msg);
+      agentStatus.value = "running";
+      agentMode.value = "network";
+      setShowNetwork(false);
+      refresh();
+    } catch (e) {
+      setActionMsg(`Network connect failed: ${e}`);
+      agentStatus.value = "error";
+    } finally {
+      setConnectingNetwork("");
+    }
+  }
+
   async function handleCopyUrl() {
     const url = info?.deploy_url || deployUrl.value;
     if (url) {
@@ -382,6 +425,7 @@ export function StatusPopover() {
   const isDeployed = mode === "deployed";
   const isRemote = mode === "remote";
   const isP2p = mode === "p2p";
+  const isNetwork = mode === "network";
   return (
     <div class="status-popover-overlay" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div class="status-popover">
@@ -598,8 +642,27 @@ export function StatusPopover() {
               </>
             )}
 
+            {/* ── Network mode actions ── */}
+            {isNetwork && (
+              <>
+                <div class="status-divider" />
+                {deployInfo?.network_service && (
+                  <div class="status-row">
+                    <span class="status-row-label">Service</span>
+                    <span class="status-row-value" style={{ fontFamily: "var(--font-mono)" }}>
+                      {deployInfo.network_service}:{deployInfo.network_port}
+                    </span>
+                  </div>
+                )}
+                <div class="status-actions">
+                  <button class="btn btn-sm btn-secondary" onClick={handleDisconnectP2p}>Disconnect</button>
+                  <button class="btn btn-sm btn-ghost" onClick={refresh} disabled={loading}>Refresh</button>
+                </div>
+              </>
+            )}
+
             {/* ── Connect to remote section (when not already connected out) ── */}
-            {!isDeployed && !isRemote && !isP2p && (
+            {!isDeployed && !isRemote && !isP2p && !isNetwork && (
               <>
                 <div class="status-divider" />
                 <button
@@ -662,6 +725,49 @@ export function StatusPopover() {
                     >
                       {connectingP2p ? "Connecting..." : "Connect"}
                     </button>
+                  </div>
+                )}
+
+                {/* Connect to a networked VM (heyo network services) */}
+                <button
+                  class="status-logs-toggle"
+                  onClick={handleToggleNetwork}
+                >
+                  {showNetwork ? "Hide" : "Connect to a networked VM"}
+                </button>
+                {showNetwork && (
+                  <div class="status-connect-section">
+                    {loadingNetwork && <span class="status-loading">Loading services…</span>}
+                    {!loadingNetwork && networkServices.length === 0 && (
+                      <div class="setup-description">
+                        No services on your default network. Expose a VM's agent port from the
+                        desktop app (or <code>heyvm network expose-service</code>), then refresh.
+                        <button
+                          class="btn btn-sm btn-ghost"
+                          onClick={handleToggleNetwork}
+                          style={{ marginTop: "6px" }}
+                        >
+                          Reload
+                        </button>
+                      </div>
+                    )}
+                    {!loadingNetwork && networkServices.map((svc) => (
+                      <div key={svc.address} class="status-row" style={{ marginTop: "4px" }}>
+                        <StatusDot status={svc.routable ? "running" : "disconnected"} />
+                        <span class="status-row-value" style={{ fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+                          {svc.address}
+                        </span>
+                        <button
+                          class="btn btn-sm btn-primary"
+                          onClick={() => handleConnectNetwork(svc)}
+                          disabled={!svc.routable || connectingNetwork === svc.address}
+                          style={{ marginLeft: "auto", padding: "1px 8px", fontSize: "11px" }}
+                          title={svc.routable ? "" : "No live route — run `heyvm network expose-service`"}
+                        >
+                          {connectingNetwork === svc.address ? "Connecting…" : "Connect"}
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 )}
               </>

@@ -212,6 +212,7 @@ pub async fn get_status_info(state: State<'_, AppState>) -> Result<StatusInfo, S
             crate::state::AgentMode::Deployed => "deployed",
             crate::state::AgentMode::Remote => "remote",
             crate::state::AgentMode::P2p => "p2p",
+            crate::state::AgentMode::Network => "network",
         }.to_string()
     };
     let deploy_url = state.deploy_url.lock().unwrap().clone();

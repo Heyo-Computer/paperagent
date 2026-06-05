@@ -133,6 +133,9 @@ pub fn run() {
             // P2P
             commands::connection::connect_p2p,
             commands::connection::disconnect_p2p,
+            // Network (heyo cloud service routing)
+            commands::connection::connect_network,
+            commands::connection::list_network_services,
             // Lists
             commands::lists::list_lists,
             commands::lists::load_list,

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo, Backlog, MoveBacklogResult, List, ListField, ListItem, ListSummary, Book, BookSummary, MigrationCounts, MigrationStatsResult, VmInfo } from "../types";
+import type { DayEntry, TodoItem, AgentMessage, Artifact, Theme, AgentConfig, StatusInfo, CalendarConfig, CalendarStatus, CalendarEvent, DeploymentInfo, NetworkServiceInfo, Backlog, MoveBacklogResult, List, ListField, ListItem, ListSummary, Book, BookSummary, MigrationCounts, MigrationStatsResult, VmInfo } from "../types";
 
 // Storage commands
 export async function loadDay(date: string): Promise<DayEntry> {
@@ -381,4 +381,13 @@ export async function connectP2p(ticket: string, relay?: string): Promise<string
 
 export async function disconnectP2p(): Promise<void> {
   return invoke("disconnect_p2p");
+}
+
+// Network commands — connect to a VM exposed on the user's heyo network.
+export async function listNetworkServices(): Promise<NetworkServiceInfo[]> {
+  return invoke("list_network_services");
+}
+
+export async function connectNetwork(name: string, port: number): Promise<string> {
+  return invoke("connect_network", { name, port });
 }

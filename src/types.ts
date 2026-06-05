@@ -153,7 +153,16 @@ export type ViewTab = "day" | "week" | "month" | "backlog" | "lists" | "books" |
 
 export type AgentStatus = "disconnected" | "starting" | "running" | "error" | "reconnecting";
 
-export type AgentMode = "local" | "deployed" | "remote" | "p2p";
+export type AgentMode = "local" | "deployed" | "remote" | "p2p" | "network";
+
+export interface NetworkServiceInfo {
+  name: string;
+  port: number;
+  address: string;
+  sandbox_kind: string;
+  status: string;
+  routable: boolean;
+}
 
 export interface VmInfo {
   name: string;
@@ -181,6 +190,8 @@ export interface DeploymentInfo {
   public_url: string | null;
   p2p_ticket?: string | null;
   p2p_relay?: string | null;
+  network_service?: string | null;
+  network_port?: number | null;
 }
 
 export type SpecVerbosity = "terse" | "normal" | "detailed";

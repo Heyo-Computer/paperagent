@@ -9,6 +9,9 @@ pub enum AgentMode {
     Remote,
     /// Connected to a sandbox shared over P2P (iroh) via a heyo:// ticket.
     P2p,
+    /// Connected to a VM exposed on the user's heyo network, resolved by
+    /// service `name:port` through the cloud (re-dialed on reconnect).
+    Network,
 }
 
 impl Default for AgentMode {
@@ -29,6 +32,12 @@ pub struct DeploymentInfo {
     /// P2P: optional iroh relay override passed alongside the ticket.
     #[serde(default)]
     pub p2p_relay: Option<String>,
+    /// Network: the service name (`name` in `name:port`) to re-dial on reconnect.
+    #[serde(default)]
+    pub network_service: Option<String>,
+    /// Network: the service port.
+    #[serde(default)]
+    pub network_port: Option<u16>,
 }
 
 impl Default for DeploymentInfo {
@@ -39,6 +48,8 @@ impl Default for DeploymentInfo {
             public_url: None,
             p2p_ticket: None,
             p2p_relay: None,
+            network_service: None,
+            network_port: None,
         }
     }
 }
@@ -64,6 +75,10 @@ pub struct AppState {
     pub p2p_ticket: Mutex<Option<String>>,
     /// P2P: the relay override for the current connection (mirror of DeploymentInfo).
     pub p2p_relay: Mutex<Option<String>>,
+    /// Network: the service name of the current connection (mirror of DeploymentInfo).
+    pub network_service: Mutex<Option<String>>,
+    /// Network: the service port of the current connection (mirror of DeploymentInfo).
+    pub network_port: Mutex<Option<u16>>,
     /// P2P: the live iroh tunnel. Dropping it tears the tunnel down.
     pub p2p_tunnel: Mutex<Option<heyo_sdk::P2pTunnel>>,
     /// Cancellation token for the running connection supervisor (Deployed/P2P).
@@ -88,6 +103,8 @@ impl AppState {
             deploy_url: Mutex::new(None),
             p2p_ticket: Mutex::new(None),
             p2p_relay: Mutex::new(None),
+            network_service: Mutex::new(None),
+            network_port: Mutex::new(None),
             p2p_tunnel: Mutex::new(None),
             supervisor: Mutex::new(None),
         }
@@ -146,6 +163,8 @@ impl AppState {
         *self.deploy_url.lock().unwrap() = info.public_url.clone();
         *self.p2p_ticket.lock().unwrap() = info.p2p_ticket.clone();
         *self.p2p_relay.lock().unwrap() = info.p2p_relay.clone();
+        *self.network_service.lock().unwrap() = info.network_service.clone();
+        *self.network_port.lock().unwrap() = info.network_port;
     }
 
     /// Clear all deployment state and persist.

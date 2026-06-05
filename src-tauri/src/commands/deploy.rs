@@ -123,6 +123,8 @@ pub async fn deploy_agent(
         public_url: Some(public_url.clone()),
         p2p_ticket: None,
         p2p_relay: None,
+        network_service: None,
+        network_port: None,
     };
     state.apply_deployment(&info);
     state.save_deployment_info(&info).map_err(|e| format!("Failed to save deployment info: {}", e))?;
@@ -160,6 +162,8 @@ pub async fn connect_remote(
         public_url: Some(url.clone()),
         p2p_ticket: None,
         p2p_relay: None,
+        network_service: None,
+        network_port: None,
     };
     state.apply_deployment(&info);
     state.save_deployment_info(&info).map_err(|e| format!("Failed to save deployment info: {}", e))?;
@@ -232,12 +236,16 @@ pub fn get_deployment_info(
     let public_url = state.deploy_url.lock().unwrap().clone();
     let p2p_ticket = state.p2p_ticket.lock().unwrap().clone();
     let p2p_relay = state.p2p_relay.lock().unwrap().clone();
+    let network_service = state.network_service.lock().unwrap().clone();
+    let network_port = *state.network_port.lock().unwrap();
     DeploymentInfo {
         mode,
         sandbox_id,
         public_url,
         p2p_ticket,
         p2p_relay,
+        network_service,
+        network_port,
     }
 }
 

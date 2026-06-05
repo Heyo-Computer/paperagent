@@ -284,9 +284,9 @@ pub async fn stop_agent(
             state.kill_port_forward();
             *state.agent_url.lock().unwrap() = None;
         }
-        crate::state::AgentMode::P2p => {
-            // P2P: stop the supervisor and tear down the iroh tunnel; the
-            // remote sandbox keeps running (it's not ours).
+        crate::state::AgentMode::P2p | crate::state::AgentMode::Network => {
+            // P2P / Network: stop the supervisor and tear down the iroh tunnel;
+            // the remote sandbox keeps running (it's not ours).
             state.stop_supervisor();
             state.drop_p2p_tunnel();
             *state.agent_url.lock().unwrap() = None;

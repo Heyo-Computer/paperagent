@@ -6,11 +6,17 @@
 //! — no child process, no output parsing; the local port is known immediately
 //! and the tunnel tears down cleanly when dropped.
 //!
-//! For both Deployed and P2P targets a background supervisor keeps the
+//! Network connects to a VM the user exposed on their heyo network: the app
+//! resolves a service `name:port` to a live `heyo://` ticket via the cloud
+//! (`heyo_sdk::Network::dial_service`, authed with the configured Heyo API key)
+//! and tunnels to it the same way as P2P. The service — not the ticket — is
+//! persisted, so reconnects re-dial for a fresh route (network tickets rotate).
+//!
+//! For Deployed, P2P, and Network targets a background supervisor keeps the
 //! connection warm (periodic `/health` pings over the pooled HTTP client) and
-//! auto-reconnects on drop: re-establishing the iroh tunnel for P2P, retrying
-//! the stable public URL for Deployed. Local mode is unmanaged (it has its own
-//! sandbox lifecycle).
+//! auto-reconnects on drop: re-establishing the iroh tunnel for P2P, re-dialing
+//! the service for Network, retrying the stable public URL for Deployed. Local
+//! mode is unmanaged (it has its own sandbox lifecycle).
 
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -109,6 +115,8 @@ pub async fn connect_p2p(
         public_url: Some(url),
         p2p_ticket: Some(ticket.clone()),
         p2p_relay: relay,
+        network_service: None,
+        network_port: None,
     };
     state.apply_deployment(&info);
     state
@@ -164,6 +172,8 @@ pub async fn resume_persisted(app: &AppHandle) -> bool {
                         public_url: Some(url),
                         p2p_ticket: Some(ticket),
                         p2p_relay: info.p2p_relay.clone(),
+                        network_service: None,
+                        network_port: None,
                     };
                     let _ = state.save_deployment_info(&refreshed);
                     spawn_supervisor(app);
@@ -171,6 +181,37 @@ pub async fn resume_persisted(app: &AppHandle) -> bool {
                 }
                 Err(e) => {
                     logging::warn(&format!("resume_persisted: P2P reconnect failed: {}", e));
+                    let _ = app.emit("agent-status", "error");
+                }
+            }
+            true
+        }
+        AgentMode::Network => {
+            app.state::<AppState>().apply_deployment(&info);
+            let _ = app.emit("agent-status", "starting");
+            let (Some(name), Some(port)) = (info.network_service.clone(), info.network_port) else {
+                logging::warn("resume_persisted: network target missing service");
+                let _ = app.emit("agent-status", "error");
+                return true;
+            };
+            logging::info(&format!("resume_persisted: reconnecting network service {}:{}", name, port));
+            match dial_network_ticket(app, &name, port).await {
+                Ok(ticket) => match establish_p2p(app, &ticket, None).await {
+                    Ok(url) => {
+                        let state = app.state::<AppState>();
+                        *state.agent_url.lock().unwrap() = Some(url.clone());
+                        *state.deploy_url.lock().unwrap() = Some(url.clone());
+                        persist_network(&state, &name, port, url);
+                        spawn_supervisor(app);
+                        let _ = app.emit("agent-status", "running");
+                    }
+                    Err(e) => {
+                        logging::warn(&format!("resume_persisted: network tunnel failed: {}", e));
+                        let _ = app.emit("agent-status", "error");
+                    }
+                },
+                Err(e) => {
+                    logging::warn(&format!("resume_persisted: network dial failed: {}", e));
                     let _ = app.emit("agent-status", "error");
                 }
             }
@@ -238,10 +279,10 @@ async fn supervisor_loop(app: AppHandle, cancel: tokio_util::sync::CancellationT
             (mode, url)
         };
 
-        // The supervisor only manages Deployed + P2P. If the mode changed out
-        // from under us, stop.
+        // The supervisor only manages Deployed + P2P + Network. If the mode
+        // changed out from under us, stop.
         match mode {
-            AgentMode::Deployed | AgentMode::P2p => {}
+            AgentMode::Deployed | AgentMode::P2p | AgentMode::Network => {}
             _ => break,
         }
 
@@ -261,6 +302,7 @@ async fn supervisor_loop(app: AppHandle, cancel: tokio_util::sync::CancellationT
 
         let recovered = match mode {
             AgentMode::P2p => reconnect_p2p(&app).await,
+            AgentMode::Network => reconnect_network(&app).await,
             AgentMode::Deployed => reconnect_deployed(&app).await,
             _ => false,
         };
@@ -295,6 +337,8 @@ async fn reconnect_p2p(app: &AppHandle) -> bool {
                 public_url: Some(url),
                 p2p_ticket: Some(ticket),
                 p2p_relay: relay,
+                network_service: None,
+                network_port: None,
             };
             let _ = state.save_deployment_info(&info);
             logging::info("reconnect_p2p: tunnel re-established");
@@ -323,4 +367,171 @@ async fn reconnect_deployed(app: &AppHandle) -> bool {
         }
     }
     false
+}
+
+// ── Network (heyo cloud service routing) ──
+
+/// Build SDK client options from the configured Heyo API key + cloud URL (the
+/// same credentials used for cloud deploy).
+fn heyo_client_options(app: &AppHandle) -> Result<heyo_sdk::HeyoClientOptions, String> {
+    let state = app.state::<AppState>();
+    let config = crate::commands::config::AgentConfig::default_from_disk(&state.config_dir);
+    if config.heyo_api_key.trim().is_empty() {
+        return Err("Set your Heyo API key in Settings to use networked VMs.".to_string());
+    }
+    let base_url = if config.heyo_cloud_url.trim().is_empty() {
+        None
+    } else {
+        Some(config.heyo_cloud_url)
+    };
+    Ok(heyo_sdk::HeyoClientOptions {
+        api_key: Some(config.heyo_api_key),
+        base_url,
+        timeout: None,
+    })
+}
+
+/// Resolve a network service `name:port` to a live `heyo://` ticket via the cloud.
+async fn dial_network_ticket(app: &AppHandle, name: &str, port: u16) -> Result<String, String> {
+    let opts = heyo_client_options(app)?;
+    let route = heyo_sdk::Network::dial_service(name, port, opts)
+        .await
+        .map_err(|e| format!("Could not resolve {}:{} on your network: {}", name, port, e))?;
+    Ok(route.connection_url)
+}
+
+fn network_info(name: &str, port: u16, url: String) -> DeploymentInfo {
+    DeploymentInfo {
+        mode: AgentMode::Network,
+        sandbox_id: None,
+        public_url: Some(url),
+        p2p_ticket: None,
+        p2p_relay: None,
+        network_service: Some(name.to_string()),
+        network_port: Some(port),
+    }
+}
+
+/// Persist the network target with a refreshed tunnel URL (mode/service are
+/// already applied to in-memory state by the caller).
+fn persist_network(state: &AppState, name: &str, port: u16, url: String) {
+    let _ = state.save_deployment_info(&network_info(name, port, url));
+}
+
+/// A service on the user's default heyo network, for the connect picker.
+#[derive(serde::Serialize)]
+pub struct NetworkServiceInfo {
+    pub name: String,
+    pub port: u16,
+    pub address: String,
+    pub sandbox_kind: String,
+    pub status: String,
+    /// True when the service has a live iroh route (connectable right now).
+    pub routable: bool,
+}
+
+/// List services registered on the user's default heyo network so the UI can
+/// offer a picker. Uses the configured Heyo API key.
+#[tauri::command]
+pub async fn list_network_services(app: AppHandle) -> Result<Vec<NetworkServiceInfo>, String> {
+    let opts = heyo_client_options(&app)?;
+    let services = heyo_sdk::Network::list_services(opts)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(services
+        .into_iter()
+        .map(|s| NetworkServiceInfo {
+            routable: s.connection_url.is_some()
+                || s.transport.as_deref() == Some("iroh_tcp_proxy"),
+            name: s.name,
+            port: s.port,
+            address: s.address,
+            sandbox_kind: s.sandbox_kind,
+            status: s.status,
+        })
+        .collect())
+}
+
+/// Connect to a VM exposed on the user's heyo network by service `name:port`.
+/// Resolves a live ticket through the cloud, tunnels to it in-process, and
+/// persists the service (not the ticket) so reconnects re-dial a fresh route.
+#[tauri::command]
+pub async fn connect_network(
+    name: String,
+    port: u16,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<String, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("A service name is required.".to_string());
+    }
+    logging::info(&format!("connect_network: service={}:{}", name, port));
+    let _ = app.emit("agent-status", "starting");
+    state.stop_supervisor();
+
+    progress(&app, &format!("Resolving {}:{} on your network...", name, port));
+    let ticket = match dial_network_ticket(&app, &name, port).await {
+        Ok(t) => t,
+        Err(e) => {
+            let _ = app.emit("agent-status", "error");
+            return Err(e);
+        }
+    };
+
+    progress(&app, "Connecting over the network...");
+    let url = match establish_p2p(&app, &ticket, None).await {
+        Ok(u) => u,
+        Err(e) => {
+            let _ = app.emit("agent-status", "error");
+            return Err(e);
+        }
+    };
+
+    *state.agent_url.lock().unwrap() = Some(url.clone());
+    let info = network_info(&name, port, url);
+    state.apply_deployment(&info);
+    state
+        .save_deployment_info(&info)
+        .map_err(|e| format!("Failed to save deployment info: {}", e))?;
+
+    spawn_supervisor(&app);
+    let _ = app.emit("agent-status", "running");
+    logging::info(&format!("connect_network: connected to {}:{}", name, port));
+    Ok(format!("Connected to {}:{}", name, port))
+}
+
+/// Re-dial the network service for a fresh route, then re-establish the tunnel.
+async fn reconnect_network(app: &AppHandle) -> bool {
+    let (name, port) = {
+        let state = app.state::<AppState>();
+        let name = state.network_service.lock().unwrap().clone();
+        let port = *state.network_port.lock().unwrap();
+        (name, port)
+    };
+    let (Some(name), Some(port)) = (name, port) else {
+        logging::warn("reconnect_network: no saved service");
+        return false;
+    };
+    let ticket = match dial_network_ticket(app, &name, port).await {
+        Ok(t) => t,
+        Err(e) => {
+            logging::warn(&format!("reconnect_network: dial failed: {}", e));
+            return false;
+        }
+    };
+    match establish_p2p(app, &ticket, None).await {
+        Ok(url) => {
+            let state = app.state::<AppState>();
+            *state.agent_url.lock().unwrap() = Some(url.clone());
+            *state.deploy_url.lock().unwrap() = Some(url.clone());
+            persist_network(&state, &name, port, url);
+            logging::info("reconnect_network: route re-established");
+            true
+        }
+        Err(e) => {
+            logging::warn(&format!("reconnect_network: {}", e));
+            false
+        }
+    }
 }
