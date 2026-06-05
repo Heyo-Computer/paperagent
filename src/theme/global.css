@@ -1767,7 +1767,8 @@ body::before {
   background: var(--color-text-tertiary);
 }
 
-.status-indicator.starting {
+.status-indicator.starting,
+.status-indicator.reconnecting {
   background: var(--color-warning);
   animation: pulse 1s infinite;
 }

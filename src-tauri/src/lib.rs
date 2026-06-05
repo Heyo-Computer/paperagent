@@ -130,6 +130,9 @@ pub fn run() {
             commands::deploy::disconnect_remote,
             commands::deploy::teardown_deploy,
             commands::deploy::get_deployment_info,
+            // P2P
+            commands::connection::connect_p2p,
+            commands::connection::disconnect_p2p,
             // Lists
             commands::lists::list_lists,
             commands::lists::load_list,

@@ -121,9 +121,14 @@ pub async fn deploy_agent(
         mode: AgentMode::Deployed,
         sandbox_id: Some(deploy_name.clone()),
         public_url: Some(public_url.clone()),
+        p2p_ticket: None,
+        p2p_relay: None,
     };
     state.apply_deployment(&info);
     state.save_deployment_info(&info).map_err(|e| format!("Failed to save deployment info: {}", e))?;
+
+    // Keep the connection warm + auto-reconnect on transient cloud outages.
+    crate::commands::connection::spawn_supervisor(&app);
 
     let _ = app.emit("agent-status", "running");
     logging::info("=== deploy_agent: complete ===");
@@ -153,6 +158,8 @@ pub async fn connect_remote(
         mode: AgentMode::Remote,
         sandbox_id: None,
         public_url: Some(url.clone()),
+        p2p_ticket: None,
+        p2p_relay: None,
     };
     state.apply_deployment(&info);
     state.save_deployment_info(&info).map_err(|e| format!("Failed to save deployment info: {}", e))?;
@@ -170,6 +177,8 @@ pub async fn disconnect_remote(
 ) -> Result<(), String> {
     logging::info("disconnect_remote: disconnecting");
 
+    state.stop_supervisor();
+    state.drop_p2p_tunnel();
     *state.agent_url.lock().unwrap() = None;
     state.clear_deployment();
 
@@ -185,6 +194,8 @@ pub async fn teardown_deploy(
     app: AppHandle,
 ) -> Result<(), String> {
     logging::info("teardown_deploy: starting");
+
+    state.stop_supervisor();
 
     let config = read_config(&state);
     let _cloud_url = if config.heyo_cloud_url.is_empty() {
@@ -219,10 +230,14 @@ pub fn get_deployment_info(
     let mode = state.agent_mode.lock().unwrap().clone();
     let sandbox_id = state.deploy_sandbox_id.lock().unwrap().clone();
     let public_url = state.deploy_url.lock().unwrap().clone();
+    let p2p_ticket = state.p2p_ticket.lock().unwrap().clone();
+    let p2p_relay = state.p2p_relay.lock().unwrap().clone();
     DeploymentInfo {
         mode,
         sandbox_id,
         public_url,
+        p2p_ticket,
+        p2p_relay,
     }
 }
 

@@ -373,3 +373,12 @@ export async function teardownDeploy(): Promise<void> {
 export async function getDeploymentInfo(): Promise<DeploymentInfo> {
   return invoke("get_deployment_info");
 }
+
+// P2P commands — connect to a sandbox shared over iroh via a heyo:// ticket.
+export async function connectP2p(ticket: string, relay?: string): Promise<string> {
+  return invoke("connect_p2p", { ticket, relay: relay ?? null });
+}
+
+export async function disconnectP2p(): Promise<void> {
+  return invoke("disconnect_p2p");
+}

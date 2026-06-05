@@ -7,6 +7,7 @@ pub mod config;
 pub mod calendar;
 pub mod speech;
 pub mod deploy;
+pub mod connection;
 pub mod lists;
 pub mod books;
 pub mod links;

@@ -4,15 +4,16 @@ import {
   getStatusInfo, stopVm, setupAgent, startAgent, stopAgent, getRecentLogs,
   getCalendarStatus, syncCalendarToTodos,
   deployAgent, connectRemote, disconnectRemote, teardownDeploy,
+  connectP2p, disconnectP2p, getDeploymentInfo,
   listSandboxes, getAgentConfig, setAgentConfig, updateAgent,
 } from "../../api/commands";
 import { listen } from "@tauri-apps/api/event";
-import type { StatusInfo, CalendarStatus } from "../../types";
+import type { StatusInfo, CalendarStatus, DeploymentInfo } from "../../types";
 
 function StatusDot({ status }: { status: string }) {
   const cls =
     status === "running" ? "running" :
-    status === "starting" ? "starting" :
+    status === "starting" || status === "reconnecting" ? "starting" :
     status === "error" || status === "unreachable" ? "error" :
     "disconnected";
   return <span class={`status-indicator ${cls}`} />;
@@ -29,7 +30,10 @@ function Row({ label, value, status }: { label: string; value: string; status?: 
 }
 
 function ModeLabel({ mode }: { mode: string }) {
-  const label = mode === "deployed" ? "Deployed" : mode === "remote" ? "Remote" : "Local";
+  const label =
+    mode === "deployed" ? "Deployed" :
+    mode === "remote" ? "Remote" :
+    mode === "p2p" ? "P2P" : "Local";
   const cls = mode === "local" ? "disconnected" : "running";
   return (
     <div class="status-row">
@@ -55,6 +59,11 @@ export function StatusPopover() {
   const [remoteUrl, setRemoteUrl] = useState("");
   const [connectingRemote, setConnectingRemote] = useState(false);
   const [showConnect, setShowConnect] = useState(false);
+  const [p2pTicket, setP2pTicket] = useState("");
+  const [p2pRelay, setP2pRelay] = useState("");
+  const [connectingP2p, setConnectingP2p] = useState(false);
+  const [showP2p, setShowP2p] = useState(false);
+  const [deployInfo, setDeployInfo] = useState<DeploymentInfo | null>(null);
   const [copied, setCopied] = useState(false);
   const [existingSandboxes, setExistingSandboxes] = useState<string[]>([]);
   const [showSandboxPicker, setShowSandboxPicker] = useState(false);
@@ -71,6 +80,9 @@ export function StatusPopover() {
       })
       .catch(() => setInfo(null))
       .finally(() => setLoading(false));
+    // Deployment info carries the P2P ticket (so it survives a relaunch) — used
+    // to display what we're connected to in P2P mode.
+    getDeploymentInfo().then(setDeployInfo).catch(() => setDeployInfo(null));
   }
 
   useEffect(() => {
@@ -298,6 +310,44 @@ export function StatusPopover() {
     }
   }
 
+  // ── P2P connect handlers ──
+
+  async function handleConnectP2p() {
+    if (!p2pTicket.trim()) return;
+    setConnectingP2p(true);
+    setActionMsg("");
+    agentStatus.value = "starting";
+    try {
+      const msg = await connectP2p(p2pTicket.trim(), p2pRelay.trim() || undefined);
+      setActionMsg(msg);
+      agentStatus.value = "running";
+      agentMode.value = "p2p";
+      setP2pTicket("");
+      setP2pRelay("");
+      setShowP2p(false);
+      refresh();
+    } catch (e) {
+      setActionMsg(`P2P connect failed: ${e}`);
+      agentStatus.value = "error";
+    } finally {
+      setConnectingP2p(false);
+    }
+  }
+
+  async function handleDisconnectP2p() {
+    setActionMsg("");
+    try {
+      await disconnectP2p();
+      setActionMsg("Disconnected");
+      agentStatus.value = "disconnected";
+      agentMode.value = "local";
+      deployUrl.value = null;
+      refresh();
+    } catch (e) {
+      setActionMsg(`Error: ${e}`);
+    }
+  }
+
   async function handleCopyUrl() {
     const url = info?.deploy_url || deployUrl.value;
     if (url) {
@@ -331,6 +381,7 @@ export function StatusPopover() {
   const isLocal = mode === "local";
   const isDeployed = mode === "deployed";
   const isRemote = mode === "remote";
+  const isP2p = mode === "p2p";
   return (
     <div class="status-popover-overlay" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div class="status-popover">
@@ -528,8 +579,27 @@ export function StatusPopover() {
               </>
             )}
 
-            {/* ── Connect to remote section (always available) ── */}
-            {!isDeployed && !isRemote && (
+            {/* ── P2P mode actions ── */}
+            {isP2p && (
+              <>
+                <div class="status-divider" />
+                {deployInfo?.p2p_ticket && (
+                  <div class="status-row">
+                    <span class="status-row-label">Ticket</span>
+                    <span class="status-row-value" style={{ fontSize: "10px", fontFamily: "var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {deployInfo.p2p_ticket}
+                    </span>
+                  </div>
+                )}
+                <div class="status-actions">
+                  <button class="btn btn-sm btn-secondary" onClick={handleDisconnectP2p}>Disconnect</button>
+                  <button class="btn btn-sm btn-ghost" onClick={refresh} disabled={loading}>Refresh</button>
+                </div>
+              </>
+            )}
+
+            {/* ── Connect to remote section (when not already connected out) ── */}
+            {!isDeployed && !isRemote && !isP2p && (
               <>
                 <div class="status-divider" />
                 <button
@@ -554,6 +624,43 @@ export function StatusPopover() {
                       disabled={connectingRemote || !remoteUrl.trim()}
                     >
                       {connectingRemote ? "Connecting..." : "Connect"}
+                    </button>
+                  </div>
+                )}
+
+                {/* Connect over P2P (iroh) */}
+                <button
+                  class="status-logs-toggle"
+                  onClick={() => setShowP2p(!showP2p)}
+                >
+                  {showP2p ? "Hide" : "Connect over P2P"}
+                </button>
+                {showP2p && (
+                  <div class="status-connect-section">
+                    <input
+                      type="text"
+                      class="status-connect-input"
+                      placeholder="heyo://… ticket or shortname"
+                      value={p2pTicket}
+                      onInput={(e) => setP2pTicket((e.target as HTMLInputElement).value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleConnectP2p(); }}
+                    />
+                    <input
+                      type="text"
+                      class="status-connect-input"
+                      placeholder="relay URL (optional)"
+                      value={p2pRelay}
+                      onInput={(e) => setP2pRelay((e.target as HTMLInputElement).value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") handleConnectP2p(); }}
+                      style={{ marginTop: "6px" }}
+                    />
+                    <button
+                      class="btn btn-sm btn-primary"
+                      onClick={handleConnectP2p}
+                      disabled={connectingP2p || !p2pTicket.trim()}
+                      style={{ marginTop: "6px" }}
+                    >
+                      {connectingP2p ? "Connecting..." : "Connect"}
                     </button>
                   </div>
                 )}

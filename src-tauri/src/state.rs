@@ -7,6 +7,8 @@ pub enum AgentMode {
     Local,
     Deployed,
     Remote,
+    /// Connected to a sandbox shared over P2P (iroh) via a heyo:// ticket.
+    P2p,
 }
 
 impl Default for AgentMode {
@@ -20,6 +22,13 @@ pub struct DeploymentInfo {
     pub mode: AgentMode,
     pub sandbox_id: Option<String>,
     pub public_url: Option<String>,
+    /// P2P: the heyo:// ticket or relay shortname used to connect. Persisted so
+    /// the tunnel can be re-established on the next launch.
+    #[serde(default)]
+    pub p2p_ticket: Option<String>,
+    /// P2P: optional iroh relay override passed alongside the ticket.
+    #[serde(default)]
+    pub p2p_relay: Option<String>,
 }
 
 impl Default for DeploymentInfo {
@@ -28,6 +37,8 @@ impl Default for DeploymentInfo {
             mode: AgentMode::Local,
             sandbox_id: None,
             public_url: None,
+            p2p_ticket: None,
+            p2p_relay: None,
         }
     }
 }
@@ -46,8 +57,17 @@ pub struct AppState {
     pub agent_mode: Mutex<AgentMode>,
     /// Cloud sandbox ID/slug after deploy.
     pub deploy_sandbox_id: Mutex<Option<String>>,
-    /// Public URL after bind (e.g. "https://slug.heyo.computer").
+    /// Public URL after bind (e.g. "https://slug.heyo.computer"). For P2P this
+    /// holds the local tunnel URL (e.g. "http://127.0.0.1:54321").
     pub deploy_url: Mutex<Option<String>>,
+    /// P2P: the ticket/shortname of the current connection (mirror of DeploymentInfo).
+    pub p2p_ticket: Mutex<Option<String>>,
+    /// P2P: the relay override for the current connection (mirror of DeploymentInfo).
+    pub p2p_relay: Mutex<Option<String>>,
+    /// P2P: the live iroh tunnel. Dropping it tears the tunnel down.
+    pub p2p_tunnel: Mutex<Option<heyo_sdk::P2pTunnel>>,
+    /// Cancellation token for the running connection supervisor (Deployed/P2P).
+    pub supervisor: Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 impl AppState {
@@ -66,6 +86,10 @@ impl AppState {
             agent_mode: Mutex::new(AgentMode::Local),
             deploy_sandbox_id: Mutex::new(None),
             deploy_url: Mutex::new(None),
+            p2p_ticket: Mutex::new(None),
+            p2p_relay: Mutex::new(None),
+            p2p_tunnel: Mutex::new(None),
+            supervisor: Mutex::new(None),
         }
     }
 
@@ -80,6 +104,20 @@ impl AppState {
         if let Some(mut child) = self.port_forward_child.lock().unwrap().take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+
+    /// Tear down the live P2P tunnel (if any). Dropping the `P2pTunnel` aborts
+    /// its background forwarding task and closes the local listener.
+    pub fn drop_p2p_tunnel(&self) {
+        let _ = self.p2p_tunnel.lock().unwrap().take();
+    }
+
+    /// Stop the connection supervisor (if running). The supervisor loop observes
+    /// the cancellation token and exits on its own; we never await it here.
+    pub fn stop_supervisor(&self) {
+        if let Some(token) = self.supervisor.lock().unwrap().take() {
+            token.cancel();
         }
     }
 
@@ -106,6 +144,8 @@ impl AppState {
         *self.agent_mode.lock().unwrap() = info.mode.clone();
         *self.deploy_sandbox_id.lock().unwrap() = info.sandbox_id.clone();
         *self.deploy_url.lock().unwrap() = info.public_url.clone();
+        *self.p2p_ticket.lock().unwrap() = info.p2p_ticket.clone();
+        *self.p2p_relay.lock().unwrap() = info.p2p_relay.clone();
     }
 
     /// Clear all deployment state and persist.

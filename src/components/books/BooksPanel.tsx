@@ -31,6 +31,11 @@ export function BooksPanel() {
   // selected page + editor state
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [pageContent, setPageContent] = useState("");
+  // The page whose content is currently in `pageContent`. The editor is
+  // uncontrolled and seeds from `pageContent` on mount, so it must only mount
+  // once this matches `selectedPageId` — otherwise it seeds with the previous
+  // page's content (and saves it back to the wrong page).
+  const [loadedPageId, setLoadedPageId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
@@ -103,6 +108,7 @@ export function BooksPanel() {
         } else {
           setSelectedPageId(null);
           setPageContent("");
+          setLoadedPageId(null);
         }
       } catch {
         setCurrent(null);
@@ -115,6 +121,7 @@ export function BooksPanel() {
     setSelectedBookId(id);
     setSelectedPageId(null);
     setPageContent("");
+    setLoadedPageId(null);
     try {
       const b = await loadBook(id);
       setCurrent(b);
@@ -129,12 +136,17 @@ export function BooksPanel() {
     setSelectedPageId(pageId);
     setRenaming(false);
     setDirty(false);
+    // Tear the editor down until the matching content has loaded, so it never
+    // remounts seeded with the previously-selected page's content.
+    setLoadedPageId(null);
+    let content = "";
     try {
-      const content = await loadPage(book.id, pageId);
-      setPageContent(content);
+      content = await loadPage(book.id, pageId);
     } catch {
-      setPageContent("");
+      content = "";
     }
+    setPageContent(content);
+    setLoadedPageId(pageId);
   }
 
   function startCreate() {
@@ -202,6 +214,7 @@ export function BooksPanel() {
     if (selectedPageId === pageId) {
       setSelectedPageId(null);
       setPageContent("");
+      setLoadedPageId(null);
     }
   }
 
@@ -380,12 +393,16 @@ export function BooksPanel() {
                   </div>
                 )}
                 <div class="books-page-content">
-                  <BlockNoteEditor
-                    key={selectedPageId}
-                    ref={editorRef}
-                    content={pageContent}
-                    onChange={() => { if (!dirty) setDirty(true); }}
-                  />
+                  {loadedPageId === selectedPageId ? (
+                    <BlockNoteEditor
+                      key={selectedPageId}
+                      ref={editorRef}
+                      content={pageContent}
+                      onChange={() => { if (!dirty) setDirty(true); }}
+                    />
+                  ) : (
+                    <div class="accordion-empty">Loading…</div>
+                  )}
                 </div>
               </>
             ) : (

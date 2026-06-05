@@ -242,8 +242,17 @@ pub async fn stop_agent(
             state.kill_port_forward();
             *state.agent_url.lock().unwrap() = None;
         }
+        crate::state::AgentMode::P2p => {
+            // P2P: stop the supervisor and tear down the iroh tunnel; the
+            // remote sandbox keeps running (it's not ours).
+            state.stop_supervisor();
+            state.drop_p2p_tunnel();
+            *state.agent_url.lock().unwrap() = None;
+        }
         crate::state::AgentMode::Deployed | crate::state::AgentMode::Remote => {
-            // Deployed/Remote: just clear the URL, sandbox keeps running
+            // Deployed/Remote: stop the supervisor and clear the URL; the
+            // sandbox keeps running.
+            state.stop_supervisor();
             *state.agent_url.lock().unwrap() = None;
         }
     }
@@ -740,28 +749,11 @@ async fn establish_host_connection(
 pub async fn auto_start_agent(app: AppHandle) {
     let state = app.state::<AppState>();
 
-    // Check for persisted deployment (deployed or remote mode)
-    let deploy_info = state.load_deployment_info();
-    if deploy_info.mode != crate::state::AgentMode::Local {
-        if let Some(ref url) = deploy_info.public_url {
-            logging::info(&format!("auto_start: found persisted {:?} deployment at {}", deploy_info.mode, url));
-            let _ = app.emit("agent-status", "starting");
-
-            if svc::check_health(url).await {
-                *state.agent_url.lock().unwrap() = Some(url.clone());
-                state.apply_deployment(&deploy_info);
-                let _ = app.emit("agent-status", "running");
-                logging::info(&format!("auto_start: reconnected to {} deployment at {}",
-                    if deploy_info.mode == crate::state::AgentMode::Deployed { "deployed" } else { "remote" }, url));
-                return;
-            } else {
-                logging::warn(&format!("auto_start: persisted deployment at {} not healthy", url));
-                // Keep deployment info so user can retry, but report error
-                state.apply_deployment(&deploy_info);
-                let _ = app.emit("agent-status", "error");
-                return;
-            }
-        }
+    // Reconnect to a persisted Deployed / P2P / Remote target, if any. This
+    // re-establishes the P2P tunnel or health-checks the deployed URL and starts
+    // the keep-alive supervisor where appropriate.
+    if crate::commands::connection::resume_persisted(&app).await {
+        return;
     }
 
     // Local mode. The sandbox is the single source of truth for data, so we start

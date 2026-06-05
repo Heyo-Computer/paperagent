@@ -34,6 +34,11 @@ dirs = "6"
 open = "5"
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-mic-recorder = "2.0.0"
+# heyvm Rust SDK (crates.io) — in-process P2P (iroh) tunnels to a shared
+# sandbox's agent port (heyo_sdk::P2pTunnel). Carries the pkcs8 rc pin its
+# iroh stack needs, so no separate pin is required here.
+heyo-sdk = "0.1.1"
+tokio-util = "0.7"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "2.0"

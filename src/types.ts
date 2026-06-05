@@ -151,9 +151,9 @@ export interface Theme {
 
 export type ViewTab = "day" | "week" | "month" | "backlog" | "lists" | "books" | "artifacts";
 
-export type AgentStatus = "disconnected" | "starting" | "running" | "error";
+export type AgentStatus = "disconnected" | "starting" | "running" | "error" | "reconnecting";
 
-export type AgentMode = "local" | "deployed" | "remote";
+export type AgentMode = "local" | "deployed" | "remote" | "p2p";
 
 export interface VmInfo {
   name: string;
@@ -179,6 +179,8 @@ export interface DeploymentInfo {
   mode: AgentMode;
   sandbox_id: string | null;
   public_url: string | null;
+  p2p_ticket?: string | null;
+  p2p_relay?: string | null;
 }
 
 export type SpecVerbosity = "terse" | "normal" | "detailed";
