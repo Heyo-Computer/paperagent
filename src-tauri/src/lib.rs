@@ -94,6 +94,7 @@ pub fn run() {
             commands::agent::update_agent,
             commands::agent::use_existing_vm,
             commands::agent::send_message,
+            commands::agent::structure_note,
             commands::agent::agent_status,
             commands::agent::get_chat_history,
             // Artifacts

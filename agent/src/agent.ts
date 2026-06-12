@@ -720,6 +720,52 @@ export class Agent {
     };
   }
 
+  /** Turn a raw voice-note transcript into a clean, structured Markdown document
+   * for a notebook page. Single-shot, tool-less, and STATELESS — it never reads
+   * or writes `this.history`, so dictating a note doesn't pollute the ongoing
+   * chat. Returns the page title (derived from the leading H1) plus the full
+   * markdown body. */
+  async structureNote(transcript: string): Promise<{ title: string; markdown: string }> {
+    const clean = (transcript ?? "").trim();
+    if (!clean) return { title: "Voice note", markdown: "" };
+
+    const system =
+      "You convert a raw voice-note transcript into a clean, well-structured " +
+      "Markdown document for a notebook page. The transcript is dictated speech: it " +
+      "may ramble, repeat itself, include filler words (um, uh, like, you know), " +
+      "false starts, and self-corrections.\n" +
+      "Your job:\n" +
+      "- Strip filler, repetition, and verbal noise while keeping ALL real content and intent.\n" +
+      "- Impose structure: a single top-level '# ' title on the first line that captures the " +
+      "subject, then '## ' section headers, bulleted or numbered lists, and short paragraphs " +
+      "as the content warrants.\n" +
+      "- Turn things the speaker enumerates ('first… second… also…', shopping/todo style runs) " +
+      "into proper Markdown lists.\n" +
+      "- Preserve the speaker's wording and meaning — do NOT invent facts, answer questions the " +
+      "transcript poses, or add commentary. This is transcription cleanup, NOT a chat reply.\n" +
+      "- Fix obvious transcription, grammar, and punctuation slips.\n" +
+      "Respond with ONLY the Markdown document — no preamble, no explanation, no code fences.";
+
+    // Stateless: pass a throwaway one-message history; never touch this.history.
+    const turn = await this.provider.chat(system, [wrapUser(this.provider, `Raw transcript:\n\n${clean}`)], []);
+
+    let markdown = turn.text.trim();
+    // Strip an accidental ```markdown … ``` fence if the model wrapped its output.
+    markdown = markdown.replace(/^```(?:markdown|md)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+    if (!markdown) markdown = clean; // never lose the note if structuring returns nothing
+
+    // Derive the page title from the leading H1, else the first non-empty line.
+    let title = "Voice note";
+    const h1 = /^#\s+(.+)$/m.exec(markdown);
+    if (h1) {
+      title = h1[1].trim();
+    } else {
+      const firstLine = markdown.split("\n").find((l) => l.trim());
+      if (firstLine) title = firstLine.replace(/^#+\s*/, "").trim().slice(0, 80);
+    }
+    return { title: title || "Voice note", markdown };
+  }
+
   private appendAssistant(raw: unknown) {
     // `raw` is a ProviderMessage that the provider returned in ChatTurn.rawAssistant
     this.history.push(raw as ProviderMessage);

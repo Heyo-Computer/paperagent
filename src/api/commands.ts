@@ -345,6 +345,16 @@ export async function transcribeFile(filePath: string): Promise<string> {
   return invoke("transcribe_file", { filePath });
 }
 
+// Run a raw voice transcript through the agent to strip noise and impose
+// document structure (title, headers, lists). Returns markdown + a page title.
+export interface StructuredNote {
+  title: string;
+  markdown: string;
+}
+export async function structureNote(transcript: string): Promise<StructuredNote> {
+  return invoke("structure_note", { transcript });
+}
+
 export async function speakText(text: string): Promise<string> {
   return invoke("speak_text", { text });
 }

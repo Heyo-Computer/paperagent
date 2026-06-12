@@ -324,6 +324,32 @@ pub async fn send_message(
     result
 }
 
+/// A voice transcript run through the agent into clean, structured markdown.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct StructuredNote {
+    pub title: String,
+    pub markdown: String,
+}
+
+/// Run a raw voice-note transcript through the agent to strip noise and impose
+/// document structure (title, headers, lists), returning markdown + a title.
+#[tauri::command]
+pub async fn structure_note(
+    transcript: String,
+    state: State<'_, AppState>,
+) -> Result<StructuredNote, String> {
+    let url = crate::services::routing::require_agent(&state).await?;
+    logging::info(&format!("structure_note: sending {} chars to {}", transcript.len(), url));
+    let params = serde_json::json!({ "transcript": transcript });
+    let result: Result<StructuredNote, String> =
+        crate::services::routing::agent_rpc(&url, "agent/structure_note", params).await;
+    match &result {
+        Ok(n) => logging::info(&format!("structure_note: got '{}' ({} md chars)", n.title, n.markdown.len())),
+        Err(e) => logging::error(&format!("structure_note: error: {}", e)),
+    }
+    result
+}
+
 #[tauri::command]
 pub async fn agent_status(state: State<'_, AppState>) -> Result<String, String> {
     let url = {

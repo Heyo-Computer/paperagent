@@ -100,6 +100,17 @@ app.post("/rpc", async (req, res) => {
         break;
       }
 
+      case "agent/structure_note": {
+        const transcript = p?.transcript as string | undefined;
+        if (transcript === undefined) {
+          res.json(makeError(request.id, -32602, "Missing 'transcript' parameter"));
+          return;
+        }
+        const structured = await agent.structureNote(transcript);
+        res.json(makeResponse(request.id, structured));
+        break;
+      }
+
       case "agent/status": {
         res.json(makeResponse(request.id, { status: "running" }));
         break;
